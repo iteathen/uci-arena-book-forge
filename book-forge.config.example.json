@@ -4,6 +4,7 @@
   "policyFile": "policy/strong_rare_v1.policy",
   "stockfish": "../../third_party/bin/stockfish.exe",
   "nativeHelper": "native/build/Release/book_forge_guard.exe",
+  "nativeLauncher": "native/build/Release/book_forge_launcher.exe",
   "channels": {
     "integration": true,
     "qualified": true

@@ -203,9 +203,17 @@ windows_startup:
   owner: book_forge_cli
   mechanism: per_user_windows_task_scheduler_logon_task
   task_name: UCI Arena Book Forge
+  launcher:
+    artifact: tools/book_forge/native/build/Release/book_forge_launcher.exe
+    pe_subsystem: windows_gui
+    node_creation_flags: [CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT]
+    stdio: windows_null_device
+    supervision: "The launcher waits for the foreground Node daemon and returns its exit code to Task Scheduler."
   rules:
-    - "startup install registers the absolute current Node executable, Book Forge CLI, workspace, optional config, and repository working directory."
-    - "The scheduled action runs the foreground daemon so Task Scheduler owns process supervision; it must not add a second detach layer."
+    - "startup install registers the absolute native launcher as the task action and passes absolute current Node, Book Forge CLI, workspace, optional config, and repository working directory paths."
+    - "The scheduled action runs a Windows GUI-subsystem launcher which creates the foreground Node daemon with no console window; it must not add a second detach layer."
+    - "Closing any interactive terminal cannot deliver console-close or Ctrl-C events to the scheduled Book Forge process tree."
+    - "Launcher startup fails closed when the native launcher is unavailable, and launcher or daemon failure remains visible through Task Scheduler exit status and daemon heartbeat state."
     - "The task uses the interactive user token at least privilege, starts after logon, has no execution time limit, and restarts after failure."
     - "The task allows battery startup because the Book Forge resource governor immediately enters backoff on battery or battery-saver state."
     - "Multiple task instances are forbidden and the daemon lock remains the final single-instance authority."
@@ -213,7 +221,9 @@ windows_startup:
     - "startup uninstall ends the scheduled instance, deletes the task, and removes only Book Forge startup-registration evidence."
   validation:
     - task_xml_contract_test
+    - launcher_pe_gui_subsystem_and_create_no_window_smoke
     - install_query_and_immediate_run_smoke
+    - scheduled_process_topology_is_launcher_then_node_without_console
     - startup_status_reports_registered_absolute_action
 
 validation:

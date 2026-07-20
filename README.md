@@ -48,9 +48,12 @@ node tools/book_forge/src/cli.mjs startup install --workspace E:\book-forge
 node tools/book_forge/src/cli.mjs startup status --workspace E:\book-forge
 ```
 
-Task Scheduler runs the foreground daemon directly, without a visible console,
-and restarts it after failure. It uses the current absolute Node, CLI,
-workspace, optional config, and repository paths. To remove the startup entry
+Task Scheduler runs a native Windows GUI-subsystem launcher, which starts the
+foreground Node daemon with `CREATE_NO_WINDOW`, redirects its standard streams
+to the Windows null device, waits for it, and returns its exit status for
+failure restart. Closing an interactive terminal therefore cannot stop Book
+Forge. The task uses the current absolute launcher, Node, CLI, workspace,
+optional config, and repository paths. To remove the startup entry
 and end its scheduled instance, use `startup uninstall`. `daemon --detach`
 remains available for temporary sessions that are not managed by Windows.
 

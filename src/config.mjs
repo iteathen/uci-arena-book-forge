@@ -12,6 +12,7 @@ const defaults = {
   policyFile: path.join(packageRoot, 'policy', 'strong_rare_v1.policy'),
   stockfish: path.join(repositoryRoot, 'third_party', 'bin', 'stockfish.exe'),
   nativeHelper: path.join(packageRoot, 'native', 'build', 'Release', 'book_forge_guard.exe'),
+  nativeLauncher: path.join(packageRoot, 'native', 'build', 'Release', 'book_forge_launcher.exe'),
   channels: { integration: true, qualified: true },
   ingestion: {
     minimumRating: 2000,
@@ -109,6 +110,7 @@ export async function loadConfig({ configFile, workspace } = {}) {
   config.policyFile = resolveConfiguredPath(config.policyFile, configDirectory);
   config.stockfish = resolveConfiguredPath(config.stockfish, configDirectory);
   config.nativeHelper = resolveConfiguredPath(config.nativeHelper, configDirectory);
+  config.nativeLauncher = resolveConfiguredPath(config.nativeLauncher, configDirectory);
   config.acquisition.tokenFile = resolveConfiguredPath(config.acquisition.tokenFile, configDirectory);
   let acquisitionEndpoint;
   try { acquisitionEndpoint = new URL(config.acquisition.endpoint); } catch { acquisitionEndpoint = null; }
@@ -144,5 +146,6 @@ export async function loadConfig({ configFile, workspace } = {}) {
   config.daemonHeartbeatFile = path.join(config.paths.locks, 'daemon.heartbeat');
   config.stockfishAvailable = Boolean(config.stockfish && existsSync(config.stockfish));
   config.nativeHelperAvailable = process.platform === 'win32' && Boolean(config.nativeHelper && existsSync(config.nativeHelper));
+  config.nativeLauncherAvailable = process.platform === 'win32' && Boolean(config.nativeLauncher && existsSync(config.nativeLauncher));
   return config;
 }

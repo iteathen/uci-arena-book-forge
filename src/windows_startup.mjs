@@ -26,10 +26,10 @@ export function quoteWindowsArgument(value) {
 }
 
 export function startupAction(config) {
-  const argumentsList = [cliPath, 'daemon', '--workspace', config.workspace];
+  const argumentsList = [path.resolve(process.execPath), cliPath, 'daemon', '--workspace', config.workspace];
   if (config.configFile) argumentsList.push('--config', config.configFile);
   return {
-    command: path.resolve(process.execPath),
+    command: path.resolve(config.nativeLauncher),
     arguments: argumentsList.map(quoteWindowsArgument).join(' '),
     workingDirectory: repositoryRoot,
   };
@@ -71,7 +71,7 @@ export function buildTaskXml(config, userSid) {
     </IdleSettings>
     <AllowStartOnDemand>true</AllowStartOnDemand>
     <Enabled>true</Enabled>
-    <Hidden>false</Hidden>
+    <Hidden>true</Hidden>
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>false</WakeToRun>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
@@ -128,6 +128,9 @@ export async function queryWindowsStartup(config) {
 
 export async function installWindowsStartup(config) {
   requireWindows();
+  if (!config.nativeLauncherAvailable) {
+    throw new Error(`Book Forge windowless launcher is unavailable: ${config.nativeLauncher}`);
+  }
   const userSid = await currentUserSid();
   const taskXml = buildTaskXml(config, userSid);
   const temporaryXml = path.join(config.paths.locks, `startup-task-${process.pid}.xml`);
@@ -145,7 +148,7 @@ export async function installWindowsStartup(config) {
   }
   const status = await queryWindowsStartup(config);
   if (!status.installed || !status.matchesCurrentConfiguration) throw new Error('Windows accepted the startup task but its registered action does not match Book Forge');
-  const evidence = { schema: 'flashfork_book_forge_startup_v1', taskName: startupTaskName, userSid,
+  const evidence = { schema: 'flashfork_book_forge_startup_v2', taskName: startupTaskName, userSid,
     action: startupAction(config), workspace: config.workspace, installedAt: new Date().toISOString() };
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
   try {

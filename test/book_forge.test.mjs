@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import { promisify } from 'node:util';
 import { ExplorerAcquisition, acquisitionQuery, validateExplorerResponse } from '../src/acquisition.mjs';
 import { Catalog } from '../src/catalog.mjs';
 import { canonicalFen, encodePolyglotMove, keyBuffer, polyglotKey, positionFingerprint } from '../src/chess.mjs';
@@ -16,7 +18,9 @@ import { NativeResourceHelper } from '../src/native_helper.mjs';
 import { publishSnapshot } from '../src/publisher.mjs';
 import { ResourceGovernor } from '../src/resource_governor.mjs';
 import { StockfishWorker } from '../src/stockfish.mjs';
-import { buildTaskXml, quoteWindowsArgument, startupAction, startupTaskName } from '../src/windows_startup.mjs';
+import { buildTaskXml, installWindowsStartup, quoteWindowsArgument, startupAction, startupTaskName } from '../src/windows_startup.mjs';
+
+const execFileAsync = promisify(execFile);
 
 async function workspace(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'book-forge-test-'));
@@ -43,7 +47,7 @@ test('Polyglot vectors, canonical FEN, and move encoding match the runtime contr
   assert.equal(encodePolyglotMove('e1g1'), 0x0107);
 });
 
-test('Windows startup task owns one supervised foreground daemon with absolute paths', async (t) => {
+test('Windows startup task uses a windowless native launcher with absolute paths', async (t) => {
   const config = await workspace(t);
   t.after(() => rm(config.workspace, { recursive: true, force: true }));
   config.workspace = path.join(config.workspace, 'Book & Forge');
@@ -51,6 +55,8 @@ test('Windows startup task owns one supervised foreground daemon with absolute p
   const action = startupAction(config);
   assert.equal(path.isAbsolute(action.command), true);
   assert.equal(path.isAbsolute(action.workingDirectory), true);
+  assert.equal(action.command, config.nativeLauncher);
+  assert.ok(action.arguments.startsWith(quoteWindowsArgument(path.resolve(process.execPath))));
   assert.match(action.arguments, / daemon --workspace /);
   assert.doesNotMatch(action.arguments, /--detach/);
   assert.equal(quoteWindowsArgument('C:\\plain'), 'C:\\plain');
@@ -60,9 +66,12 @@ test('Windows startup task owns one supervised foreground daemon with absolute p
   assert.match(xml, /<LogonType>InteractiveToken<\/LogonType>/);
   assert.match(xml, /<RunLevel>LeastPrivilege<\/RunLevel>/);
   assert.match(xml, /<MultipleInstancesPolicy>IgnoreNew<\/MultipleInstancesPolicy>/);
+  assert.match(xml, /<Hidden>true<\/Hidden>/);
   assert.match(xml, /<ExecutionTimeLimit>PT0S<\/ExecutionTimeLimit>/);
   assert.match(xml, /<RestartOnFailure>/);
   assert.match(xml, /Book &amp; Forge/);
+  config.nativeLauncherAvailable = false;
+  await assert.rejects(installWindowsStartup(config), /windowless launcher is unavailable/);
 });
 
 test('catalog schema three migrates acquisition authority columns without losing sources', async (t) => {
@@ -517,4 +526,28 @@ test('optional Windows guard exposes battery, input-idle, and processor-limit te
   assert.equal(typeof probe.on_battery, 'boolean');
   assert.ok(Number.isInteger(probe.input_idle_ms));
   assert.ok(probe.processor_limit_percent >= 0 && probe.processor_limit_percent <= 100);
+});
+
+test('native launcher is a GUI process that runs Node without a console and propagates its exit code', async (t) => {
+  const config = await workspace(t);
+  t.after(() => rm(config.workspace, { recursive: true, force: true }));
+  if (!config.nativeLauncherAvailable) return t.skip('native windowless launcher is not built');
+
+  const executable = await readFile(config.nativeLauncher);
+  const peOffset = executable.readUInt32LE(0x3c);
+  assert.equal(executable.readUInt32LE(peOffset), 0x00004550);
+  assert.equal(executable.readUInt16LE(peOffset + 24 + 68), 2);
+
+  const { stdout } = await execFileAsync(config.nativeLauncher, ['--probe'], { windowsHide: true, timeout: 5_000 });
+  assert.deepEqual(JSON.parse(stdout), {
+    schema: 'flashfork_book_forge_launcher_probe_v1', windows_gui_subsystem: true, create_no_window: true,
+  });
+
+  const fixture = path.join(config.workspace, 'launcher fixture.mjs');
+  const marker = path.join(config.workspace, 'launcher marker.txt');
+  await writeFile(fixture, "import { writeFile } from 'node:fs/promises';\nawait writeFile(process.argv[2], process.argv[3]);\nprocess.exitCode = Number(process.argv[4]);\n");
+  await assert.rejects(execFileAsync(config.nativeLauncher,
+    [process.execPath, fixture, marker, 'windowless child completed', '23'], { windowsHide: true, timeout: 10_000 }),
+  (error) => error.code === 23);
+  assert.equal(await readFile(marker, 'utf8'), 'windowless child completed');
 });
