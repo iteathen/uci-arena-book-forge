@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { Chess } from 'chess.js';
 import { canonicalFen, encodePolyglotMove, keyBuffer, legalUciMove, polyglotKey, positionFingerprint } from './chess.mjs';
 import { parsePolicy, scoreSiblingCandidates } from './book_policy.mjs';
+import { RESOURCE_WORK_CLASSES } from './resource_governor.mjs';
 
 const providerId = 'lichess_opening_explorer';
 const overlapDomain = 'lichess_standard_rated';
@@ -139,7 +140,7 @@ export class ExplorerAcquisition {
       if (polling) return;
       polling = true;
       try {
-        const permit = await governor.permit();
+        const permit = await governor.permit(RESOURCE_WORK_CLASSES.ACQUISITION);
         if (!permit.allowed) { abortReason = permit.reason || 'resource permission revoked'; controller.abort(); }
       } finally {
         polling = false;
@@ -213,7 +214,7 @@ export class ExplorerAcquisition {
     const limit = Math.max(1, Number(maxRequests ?? (bootstrapRemaining ? Math.min(bootstrapRemaining, 25) : 1)));
     const report = { enabled: true, requests: 0, positions: 0, moves: 0, enqueued: 0, stopped: '' };
     for (let count = 0; count < limit; count += 1) {
-      const permit = await governor.permit();
+      const permit = await governor.permit(RESOURCE_WORK_CLASSES.ACQUISITION);
       if (!permit.allowed) { report.stopped = permit.reason; break; }
       const frontier = this.catalog.nextFrontier(Number(this.dataset.id));
       if (!frontier) { report.stopped = 'frontier not due'; break; }

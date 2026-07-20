@@ -58,13 +58,17 @@ and end its scheduled instance, use `startup uninstall`. `daemon --detach`
 remains available for temporary sessions that are not managed by Windows.
 
 `pause` and `resume` are durable control commands. The daemon runs at low OS
-priority, starts with one persistent one-thread Stockfish worker, backs off on
-memory/disk/priority-process pressure, and only ramps additional workers after
-sustained idle samples. A 75 GiB free-space floor and deterministic six-move
-per-position/two-million-record export caps are enabled by default. Monthly
-maintenance consolidates cohorts older than 24 months without losing source
-identity, drops obsolete retired PV text, and retains four snapshot generations
-per channel. Publishing identical content is a no-op.
+priority and uses phase-specific resource permits. While `flashfork_uci.exe` is
+running, low-rate Explorer acquisition and bounded integration publication stay
+enabled in courtesy mode; Stockfish analysis, file ingestion, qualified
+publication, and maintenance wait. Operator pause, battery/power limits,
+memory/disk pressure, and configured compiler/build processes stop every work
+class. Additional Stockfish workers ramp only after sustained idle samples. A
+75 GiB free-space floor and deterministic six-move per-position/two-million-
+record export caps are enabled by default. Monthly maintenance consolidates
+cohorts older than 24 months without losing source identity, drops obsolete
+retired PV text, and retains four snapshot generations per channel. Publishing
+identical content is a no-op.
 
 `status` includes the current acquisition frontier and request budget plus the
 daemon phase, heartbeat, cycle timestamps, and bounded last-cycle report. The

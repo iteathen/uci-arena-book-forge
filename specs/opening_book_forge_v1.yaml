@@ -252,3 +252,42 @@ validation:
     - overlap_domain_authority_prevents_explorer_pgn_double_counting
     - rate_limit_auth_circuit_daily_budget_and_resource_abort
     - bounded_daemon_report_and_advancing_heartbeat
+
+phase_specific_resource_permits_2026_07_20:
+  status: active
+  problem: >
+    A persistent flashfork_uci process currently blocks the complete daemon
+    cycle, including low-rate Explorer acquisition, so a continuously running
+    bot can prevent its own integration book from growing.
+  work_classes:
+    acquisition:
+      cost: lightweight_network_and_sqlite
+      allowed_with_idle_engine_process: true
+      mode: courtesy
+    integration_publication:
+      cost: bounded_node_compile_and_atomic_publish
+      allowed_with_idle_engine_process: true
+      mode: courtesy
+    stockfish_analysis:
+      cost: heavy_cpu
+      allowed_with_engine_process: false
+    ingestion_and_maintenance:
+      cost: potentially_heavy_io_cpu
+      allowed_with_engine_process: false
+  hard_stops:
+    - operator_pause
+    - battery_or_battery_saver
+    - insufficient_disk
+    - insufficient_memory
+    - restrictive_processor_power_limit_under_load
+    - compiler_or_build_process
+  rules:
+    - "ResourceGovernor returns a typed permit for a requested work class; a generic allowed boolean cannot authorize every phase."
+    - "An active flashfork_uci process downgrades permitted lightweight work to courtesy but blocks heavy work; it is not by itself a global hard stop."
+    - "Acquisition retains its two-second revocation/abort contract and one-request-at-a-time rate limit."
+    - "A running engine retains its loaded immutable snapshot, so a courtesy publication affects only future engines or explicit reloads."
+    - "No permit path reads, logs, hashes, or exposes credential contents."
+  validation:
+    - "Mocked process/resource states prove acquisition advances while flashfork_uci is present and analysis/maintenance do not."
+    - "Every hard stop blocks and aborts all work classes."
+    - "Courtesy operation keeps measured foreground engine slowdown below two percent."

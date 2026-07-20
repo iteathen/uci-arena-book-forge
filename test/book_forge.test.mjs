@@ -11,12 +11,12 @@ import { Catalog } from '../src/catalog.mjs';
 import { canonicalFen, encodePolyglotMove, keyBuffer, polyglotKey, positionFingerprint } from '../src/chess.mjs';
 import { buildSnapshot, validateSnapshot } from '../src/compiler.mjs';
 import { loadConfig } from '../src/config.mjs';
-import { runDaemon } from '../src/daemon.mjs';
+import { runCycle, runDaemon } from '../src/daemon.mjs';
 import { discoverInbox, ingestSource, registerInput } from '../src/ingest.mjs';
 import { runMaintenance } from '../src/maintenance.mjs';
 import { NativeResourceHelper } from '../src/native_helper.mjs';
 import { publishSnapshot } from '../src/publisher.mjs';
-import { ResourceGovernor } from '../src/resource_governor.mjs';
+import { RESOURCE_WORK_CLASSES, ResourceGovernor } from '../src/resource_governor.mjs';
 import { StockfishWorker } from '../src/stockfish.mjs';
 import { buildTaskXml, installWindowsStartup, quoteWindowsArgument, startupAction, startupTaskName } from '../src/windows_startup.mjs';
 
@@ -34,6 +34,35 @@ function cleanCatalog(t, catalog, config) {
   t.after(async () => {
     catalog.close();
     await rm(config.workspace, { recursive: true, force: true });
+  });
+}
+
+function mockedResourceGovernor(config, catalog, {
+  availableMemoryGb = 64,
+  freeWorkspaceGb = 1_024,
+  idleRatio = 0.50,
+  native = {},
+  runningProcesses = [],
+} = {}) {
+  let idle = 0;
+  let total = 0;
+  const normalizedProcesses = new Set(runningProcesses.map((name) => name.toLowerCase()));
+  return new ResourceGovernor(config, catalog, {
+    cpuTotalsImpl: () => {
+      idle += idleRatio * 100;
+      total += 100;
+      return { idle, total };
+    },
+    statfsImpl: async () => ({ bavail: BigInt(Math.floor(freeWorkspaceGb * 1_024)), bsize: 1_048_576n }),
+    freeMemoryImpl: () => availableMemoryGb * 1024 ** 3,
+    processProbe: async (names) => names.filter((name) => normalizedProcesses.has(name.toLowerCase())),
+    nativeHelper: {
+      start() {},
+      close() {},
+      async probe() {
+        return { on_battery: false, battery_saver: false, input_idle_ms: 0, processor_limit_percent: 100, ...native };
+      },
+    },
   });
 }
 
@@ -255,9 +284,13 @@ test('Explorer rate limits and live resource revocation back off without partial
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
   let permits = 0;
-  const governor = { permit: async () => (++permits < 3
-    ? { allowed: true, mode: 'courtesy' }
-    : { allowed: false, mode: 'backoff', reason: 'priority process is running' }) };
+  const permitClasses = [];
+  const governor = { permit: async (workClass) => {
+    permitClasses.push(workClass);
+    return ++permits < 3
+      ? { allowed: true, mode: 'courtesy' }
+      : { allowed: false, mode: 'backoff', reason: 'priority process is running' };
+  } };
   const acquisition = new ExplorerAcquisition(catalog, config, { fetchImpl: async (_url, options) => new Promise((_resolve, reject) => {
     options.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
   }) });
@@ -266,6 +299,8 @@ test('Explorer rate limits and live resource revocation back off without partial
   assert.ok(performance.now() - started < 2_000);
   assert.equal(report.stopped, 'priority process is running');
   assert.equal(catalog.aggregateObservations({ includeFixtures: false }).length, 0);
+  assert.ok(permitClasses.length >= 3);
+  assert.ok(permitClasses.every((workClass) => workClass === RESOURCE_WORK_CLASSES.ACQUISITION));
 
   catalog.retryAcquisitionAuth();
   catalog.database.prepare("UPDATE acquisition_frontier SET state='queued',next_due_at=?").run(new Date().toISOString());
@@ -460,6 +495,99 @@ test('qualified channel promotes automatically after current eval and external g
   assert.equal(publication.snapshotId, qualified.id);
 });
 
+test('resource governor keeps lightweight work in courtesy mode while the engine is running', async (t) => {
+  const config = await workspace(t);
+  config.resources.priorityProcessNames = ['msbuild.exe', 'cl.exe'];
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const governor = mockedResourceGovernor(config, catalog, { runningProcesses: ['flashfork_uci.exe'] });
+  t.after(() => governor.close());
+
+  await assert.rejects(governor.permit(), /Unknown Book Forge resource work class/);
+  for (const workClass of [RESOURCE_WORK_CLASSES.ACQUISITION, RESOURCE_WORK_CLASSES.INTEGRATION_PUBLICATION]) {
+    const permit = await governor.permit(workClass);
+    assert.equal(permit.workClass, workClass);
+    assert.equal(permit.allowed, true);
+    assert.equal(permit.mode, 'courtesy');
+    assert.equal(permit.engineProcessRunning, true);
+    assert.equal(permit.hardStop, false);
+  }
+  for (const workClass of [RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS, RESOURCE_WORK_CLASSES.INGESTION_AND_MAINTENANCE]) {
+    const permit = await governor.permit(workClass);
+    assert.equal(permit.workClass, workClass);
+    assert.equal(permit.allowed, false);
+    assert.equal(permit.mode, 'backoff');
+    assert.equal(permit.engineProcessRunning, true);
+    assert.equal(permit.hardStop, false);
+    assert.match(permit.reason, /flashfork_uci\.exe is running/);
+  }
+});
+
+test('every hard resource stop rejects every work class', async (t) => {
+  const config = await workspace(t);
+  config.resources.minimumFreeWorkspaceGb = 75;
+  config.resources.priorityProcessNames = ['flashfork_uci.exe', 'msbuild.exe', 'cl.exe'];
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const states = [
+    { name: 'operator pause', setup: () => catalog.setPaused(true, 'test pause') },
+    { name: 'insufficient disk', options: { freeWorkspaceGb: 1 } },
+    { name: 'insufficient memory', options: { availableMemoryGb: 1 } },
+    { name: 'battery', options: { native: { on_battery: true } } },
+    { name: 'restricted processor power', options: { idleRatio: 0.25, native: { processor_limit_percent: 50 } } },
+    { name: 'compiler process', options: { runningProcesses: ['msbuild.exe'] } },
+  ];
+
+  for (const state of states) {
+    catalog.setPaused(false, '');
+    state.setup?.();
+    const governor = mockedResourceGovernor(config, catalog, state.options);
+    try {
+      for (const workClass of Object.values(RESOURCE_WORK_CLASSES)) {
+        const permit = await governor.permit(workClass);
+        assert.equal(permit.allowed, false, `${state.name} allowed ${workClass}`);
+        assert.equal(permit.hardStop, true, `${state.name} did not mark ${workClass} as a hard stop`);
+        assert.ok(permit.reason, `${state.name} did not explain ${workClass}`);
+      }
+    } finally {
+      governor.close();
+    }
+  }
+  catalog.setPaused(false, '');
+});
+
+test('daemon advances acquisition and integration publication while deferring heavy work to a running engine', async (t) => {
+  const config = await workspace(t);
+  config.resources.priorityProcessNames = ['flashfork_uci.exe', 'msbuild.exe', 'cl.exe'];
+  config.channels.qualified = false;
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const source = await registerInput(catalog, { fixtureId: 'bootstrap_v1' });
+  await ingestSource(catalog, source, config);
+  const governor = mockedResourceGovernor(config, catalog, { runningProcesses: ['flashfork_uci.exe'] });
+  t.after(() => governor.close());
+  const phases = [];
+  const acquisition = {
+    async run(acquisitionGovernor) {
+      const permit = await acquisitionGovernor.permit(RESOURCE_WORK_CLASSES.ACQUISITION);
+      assert.equal(permit.allowed, true);
+      assert.equal(permit.mode, 'courtesy');
+      return { enabled: true, requests: 1, positions: 1, moves: 2, enqueued: 0, stopped: '' };
+    },
+  };
+
+  const report = await runCycle(catalog, config, governor, acquisition,
+    (phase, mode) => phases.push({ phase, mode }), 1);
+  assert.equal(report.acquisition.requests, 1);
+  assert.ok(report.integration?.snapshotId);
+  assert.equal(report.analysis.skipped, true);
+  assert.match(report.analysis.reason, /flashfork_uci\.exe is running/);
+  assert.equal(report.maintenance.skipped, true);
+  assert.match(report.maintenance.reason, /flashfork_uci\.exe is running/);
+  assert.ok(phases.some(({ phase, mode }) => phase === 'publication' && mode === 'courtesy'));
+  assert.ok(phases.some(({ phase, mode }) => phase === 'analysis' && mode === 'backoff'));
+});
+
 test('resource governor enters backoff before starting work under disk pressure', async (t) => {
   const config = await workspace(t);
   config.resources.minimumFreeWorkspaceGb = 1_000_000_000;
@@ -467,10 +595,12 @@ test('resource governor enters backoff before starting work under disk pressure'
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
   const governor = new ResourceGovernor(config, catalog);
+  t.after(() => governor.close());
   const started = performance.now();
-  const permit = await governor.permit();
+  const permit = await governor.permit(RESOURCE_WORK_CLASSES.ACQUISITION);
   assert.equal(permit.allowed, false);
   assert.equal(permit.mode, 'backoff');
+  assert.equal(permit.hardStop, true);
   assert.ok(performance.now() - started < 2_000);
 });
 

@@ -5,10 +5,14 @@ import { buildSnapshot } from './compiler.mjs';
 import { discoverInbox, ingestSource } from './ingest.mjs';
 import { runMaintenance } from './maintenance.mjs';
 import { publishSnapshot } from './publisher.mjs';
-import { ResourceGovernor } from './resource_governor.mjs';
+import { RESOURCE_WORK_CLASSES, ResourceGovernor } from './resource_governor.mjs';
 import { analyzeObservations } from './stockfish.mjs';
 
 function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
+
+function scopedGovernor(governor, workClass) {
+  return { permit: () => governor.permit(workClass) };
+}
 
 async function acquireLock(config) {
   const filename = path.join(config.paths.locks, 'daemon.lock');
@@ -60,56 +64,86 @@ function acquisitionBootstrapReady(catalog, config) {
 export async function runCycle(catalog, config, governor = new ResourceGovernor(config, catalog),
     acquisition = new ExplorerAcquisition(catalog, config), setPhase = () => {}, acquisitionMaxRequests = undefined,
     acquisitionOnly = false) {
-  const initialPermit = await governor.permit();
-  const report = { acquisition: null, discovered: [], ingested: [], integration: null, analysis: null, qualified: null, maintenance: null, resource: initialPermit };
-  if (!initialPermit.allowed) {
-    report.acquisition = { enabled: config.acquisition.enabled, requests: 0, positions: 0, moves: 0, stopped: initialPermit.reason };
-    report.analysis = { positions: 0, moves: 0, skipped: true, reason: initialPermit.reason };
-    report.maintenance = { skipped: true, reason: initialPermit.reason };
+  const acquisitionPermit = await governor.permit(RESOURCE_WORK_CLASSES.ACQUISITION);
+  const report = { acquisition: null, discovered: [], ingested: [], integration: null, analysis: null, qualified: null, maintenance: null, resource: acquisitionPermit };
+  if (!acquisitionPermit.allowed) {
+    report.acquisition = { enabled: config.acquisition.enabled, requests: 0, positions: 0, moves: 0, stopped: acquisitionPermit.reason };
+    report.analysis = { positions: 0, moves: 0, skipped: true, reason: acquisitionPermit.reason };
+    report.maintenance = { skipped: true, reason: acquisitionPermit.reason };
     return report;
   }
-  setPhase('acquisition', initialPermit.mode);
+  setPhase('acquisition', acquisitionPermit.mode);
   report.acquisition = await acquisition.run(governor, { maxRequests: acquisitionMaxRequests });
   if (acquisitionOnly) return report;
-  setPhase('ingestion', report.resource.mode);
-  report.discovered = await discoverInbox(catalog, config, governor);
-  for (const source of catalog.pendingSources()) {
-    const permit = await governor.permit();
-    report.resource = permit;
-    if (!permit.allowed) break;
-    try {
-      const telemetry = await ingestSource(catalog, source, config, governor);
-      report.ingested.push({ sourceId: Number(source.id), ...telemetry });
-      if (telemetry.interrupted) break;
-    } catch (error) {
-      report.ingested.push({ sourceId: Number(source.id), error: error.message });
+
+  const ingestionGovernor = scopedGovernor(governor, RESOURCE_WORK_CLASSES.INGESTION_AND_MAINTENANCE);
+  const ingestionPermit = await governor.permit(RESOURCE_WORK_CLASSES.INGESTION_AND_MAINTENANCE);
+  report.resource = ingestionPermit;
+  setPhase('ingestion', ingestionPermit.mode);
+  if (ingestionPermit.allowed) {
+    report.discovered = await discoverInbox(catalog, config, ingestionGovernor);
+    for (const source of catalog.pendingSources()) {
+      const permit = await governor.permit(RESOURCE_WORK_CLASSES.INGESTION_AND_MAINTENANCE);
+      report.resource = permit;
+      if (!permit.allowed) break;
+      try {
+        const telemetry = await ingestSource(catalog, source, config, ingestionGovernor);
+        report.ingested.push({ sourceId: Number(source.id), ...telemetry });
+        if (telemetry.interrupted) break;
+      } catch (error) {
+        report.ingested.push({ sourceId: Number(source.id), error: error.message });
+      }
     }
   }
+
   const localReady = catalog.completedSources().some((source) => source.contribution_mode === 'additive');
   const remoteReady = config.acquisition.enabled && catalog.hasPublishableObservations() && acquisitionBootstrapReady(catalog, config);
   if (config.channels.integration && (localReady || remoteReady) && integrationBuildDue(catalog, config, report)) {
-    setPhase('publication', report.resource.mode);
-    try {
-      const snapshot = await buildSnapshot(catalog, config, 'integration');
-      report.integration = await publishSnapshot(catalog, config, snapshot.directory, 'integration');
-      catalog.setMetadata('last_integration_build_at', new Date().toISOString());
-    } catch (error) {
-      report.integration = { blocked: true, reason: error.message };
+    const publicationPermit = await governor.permit(RESOURCE_WORK_CLASSES.INTEGRATION_PUBLICATION);
+    report.resource = publicationPermit;
+    setPhase('publication', publicationPermit.mode);
+    if (publicationPermit.allowed) {
+      try {
+        const snapshot = await buildSnapshot(catalog, config, 'integration');
+        report.integration = await publishSnapshot(catalog, config, snapshot.directory, 'integration');
+        catalog.setMetadata('last_integration_build_at', new Date().toISOString());
+      } catch (error) {
+        report.integration = { blocked: true, reason: error.message };
+      }
+    } else {
+      report.integration = { blocked: true, reason: publicationPermit.reason };
     }
   }
-  setPhase('analysis', report.resource.mode);
-  report.analysis = await analyzeObservations(catalog, config, governor);
+
+  const analysisPermit = await governor.permit(RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS);
+  report.resource = analysisPermit;
+  setPhase('analysis', analysisPermit.mode);
+  if (analysisPermit.allowed) {
+    report.analysis = await analyzeObservations(catalog, config,
+      scopedGovernor(governor, RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS));
+  } else {
+    report.analysis = { positions: 0, moves: 0, skipped: true, reason: analysisPermit.reason };
+  }
+
   if (config.channels.qualified && catalog.hasPublishableObservations({ includeFixtures: false })) {
-    setPhase('publication', report.resource.mode);
-    try {
-      const snapshot = await buildSnapshot(catalog, config, 'qualified');
-      report.qualified = await publishSnapshot(catalog, config, snapshot.directory, 'qualified');
-    } catch (error) {
-      report.qualified = { blocked: true, reason: error.message };
+    const qualifiedPermit = await governor.permit(RESOURCE_WORK_CLASSES.INGESTION_AND_MAINTENANCE);
+    report.resource = qualifiedPermit;
+    setPhase('publication', qualifiedPermit.mode);
+    if (qualifiedPermit.allowed) {
+      try {
+        const snapshot = await buildSnapshot(catalog, config, 'qualified');
+        report.qualified = await publishSnapshot(catalog, config, snapshot.directory, 'qualified');
+      } catch (error) {
+        report.qualified = { blocked: true, reason: error.message };
+      }
+    } else {
+      report.qualified = { blocked: true, reason: qualifiedPermit.reason };
     }
   }
-  setPhase('maintenance', report.resource.mode);
-  const maintenancePermit = await governor.permit();
+
+  const maintenancePermit = await governor.permit(RESOURCE_WORK_CLASSES.INGESTION_AND_MAINTENANCE);
+  report.resource = maintenancePermit;
+  setPhase('maintenance', maintenancePermit.mode);
   if (maintenancePermit.allowed) report.maintenance = await runMaintenance(catalog, config);
   else report.maintenance = { skipped: true, reason: maintenancePermit.reason };
   return report;
