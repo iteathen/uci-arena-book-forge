@@ -1,0 +1,19 @@
+{
+  "name": "@uci-arena/book-forge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "bin": {
+    "book-forge": "src/cli.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@echecs/zobrist": "1.0.2",
+    "chess.js": "1.4.0"
+  }
+}

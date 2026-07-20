@@ -1,0 +1,4 @@
+node_modules/
+.book-forge/
+*.local.json
+native/build/

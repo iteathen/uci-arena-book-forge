@@ -1,0 +1,16 @@
+prior_games=64
+draw_value=0.35
+confidence_standard_errors=1.0
+minimum_games=32
+maximum_lcb_gap=0.05
+quality_exponent=14.0
+maximum_rarity_multiplier=4.0
+exit_intercept=-4.2
+exit_depth_weight=2.0
+exit_advantage_weight=2.4
+exit_disadvantage_weight=-3.0
+exit_weakness_weight=0.8
+eval_deadband_cp=20
+eval_scale_cp=180
+depth_start_ply=8
+depth_span_plies=22

@@ -1,0 +1,13 @@
+{
+  "schema": "flashfork_book_forge_fixture_v1",
+  "id": "bootstrap_v1",
+  "qualification": "integration_only",
+  "observations": [
+    {"fen":"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1","move":"e2e4","games":100,"wins":55,"draws":25,"losses":20},
+    {"fen":"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1","move":"d2d4","games":80,"wins":42,"draws":22,"losses":16},
+    {"fen":"rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1","move":"c7c5","games":60,"wins":31,"draws":16,"losses":13},
+    {"fen":"rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1","move":"e7e5","games":55,"wins":28,"draws":15,"losses":12},
+    {"fen":"rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1","move":"g8f6","games":50,"wins":25,"draws":15,"losses":10},
+    {"fen":"rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1","move":"d7d5","games":45,"wins":22,"draws":14,"losses":9}
+  ]
+}

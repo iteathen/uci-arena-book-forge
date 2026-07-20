@@ -1,0 +1,152 @@
+meta:
+  spec_id: opening_book_forge_v1
+  name: Standalone Continuous Opening Book Forge
+  version: 1
+  status: active
+  owner_subsystem: opening_book_forge
+  created: '2026-07-20'
+  purpose: >
+    Define the independent Node.js producer that incrementally accumulates,
+    evaluates, trims, compiles, validates, and publishes opening-book snapshots
+    consumed through the existing UCI knowledge-source file contract.
+
+authority:
+  production_builder: tools/book_forge
+  runtime_consumer: specs/uci_knowledge_sources_v1.yaml
+  rules:
+    - "Book Forge never imports engine or UCI runtime source and never mutates a running engine."
+    - "The only production boundary is an immutable, mutually validated book snapshot."
+    - "Book construction and its test harness are Node-only; no Python book path is retained."
+    - "Accumulated knowledge is durable; policy, evaluation, and export changes never require PGN re-ingestion."
+
+runtime:
+  node_minimum: 24.15.0
+  package_root: tools/book_forge
+  default_workspace_windows: 'E:\book-forge'
+  portable_workspace_environment: BOOK_FORGE_ROOT
+  dependencies:
+    chess_js: 1.4.0
+    echecs_zobrist: 1.0.2
+  shipped_python_dependency: false
+
+storage:
+  catalog: catalog.sqlite
+  observation_shards: 64
+  shard_rule: high_six_bits_of_polyglot_key
+  position_identity:
+    canonical_fen: "first four FEN fields plus halfmove 0 and fullmove 1"
+    fingerprint: "first 16 bytes of SHA-256 over canonical FEN UTF-8"
+    polyglot_key_storage: big_endian_8_byte_blob
+  observation_key: [source_id, chunk_index, month, speed, rating_bucket, position_fingerprint, move]
+  observation_values: [games, wins, draws, losses]
+  ingestion_status: [pending, processing, complete, error]
+  source_lifecycle: [active, quarantined, retired, restored]
+  invariants:
+    - "Source SHA-256 is unique and ingestion is idempotent."
+    - "Chunk aggregation is memory-bounded, deterministic, and idempotently replaceable after interruption."
+    - "Sources remain separable so exclusion never requires raw-PGN replay."
+    - "Expensive analysis is reusable only under an identical engine, NNUE, and node-tier fingerprint."
+
+inputs:
+  supported: [.pgn, .pgn.gz, .pgn.zst, integration_fixture]
+  inbox: "The daemon discovers stable supported files in <workspace>/inbox and deduplicates immutable content by SHA-256."
+  filters:
+    variant: standard
+    speeds: [rapid, classical]
+    both_player_ratings_minimum: 2000
+    require_normal_result: true
+    maximum_ply: 30
+  perspective: side_to_move_before_candidate_move
+  fixture_rule: "Fixture observations are permanently ineligible for the qualified channel."
+
+analysis:
+  provider: persistent_stockfish_uci_workers
+  required_interrogation: [uciok, readyok, Threads, Hash, bestmove]
+  defaults:
+    threads_per_worker: 1
+    hash_mb_per_worker: 128
+    initial_nodes: 250000
+    confirmation_nodes: 2000000
+  relative_score_perspective: candidate_mover
+  lifecycle_rules:
+    - "Normally admit a new move at relative loss <= 30 cp."
+    - "A 30..45 cp move requires rare-line statistical qualification, no WDL bucket loss, and confirmation analysis."
+    - "Quarantine after two current-engine results above 45 cp."
+    - "Retire after two results above 70 cp, a decisive WDL loss, or verified forced mate."
+    - "Never prune from absolute position evaluation alone."
+
+publication:
+  snapshot_files:
+    - strong_rare_v1.bin
+    - strong_rare_v1.ffstats
+    - strong_rare_v1.policy
+    - snapshot.manifest.json
+    - evaluation.audit.jsonl
+  channels:
+    integration:
+      automatic: true
+      fixture_allowed: true
+      gates: [schema, digest, ordering, legality, deterministic_compile]
+    qualified:
+      automatic: true
+      fixture_allowed: false
+      gates:
+        - current_stockfish_evidence_for_every_emitted_move
+        - existing_lcb_and_minimum_game_contract
+        - rarity_benefit_without_quality_regression
+        - paired_color_elo_lower_bound_at_least_negative_5
+        - zero_uci_compatibility_regressions
+  atomicity: "Validate an immutable version directory, then atomically replace the channel directory."
+  rollback: "Preserve the prior channel version and restore it on failed post-publication validation."
+  running_engine_rule: "A running engine retains its loaded snapshot; activation occurs on engine start or explicit reload."
+
+bounded_growth:
+  maximum_published_moves_per_position: 6
+  maximum_published_records: 2000000
+  minimum_free_workspace_gb: 75
+  maintenance: monthly
+  snapshot_versions_retained_per_channel: 4
+  detailed_cohort_retention_months: 24
+  rules:
+    - "Compact old observation cohorts without losing source provenance."
+    - "Retain compact retired evidence while deleting obsolete PV payloads."
+    - "Apply entry/removal hysteresis and re-evaluate stale high-value moves before retirement."
+
+resource_governor:
+  modes: [paused, courtesy, idle_harvest, backoff]
+  courtesy:
+    worker_limit: 1
+    cpu_target_percent: 20
+    priority: low
+  idle_harvest:
+    initial_stockfish_workers: 8
+    cpu_target_percent: 80
+    ramp: one_worker_per_30_seconds
+  backoff_deadline_seconds: 2
+  pause_thresholds:
+    available_memory_gb: 6
+    free_workspace_gb: 75
+  windows_helper_scope: [job_objects, eco_qos, input_idle, io_priority]
+  rules:
+    - "Back off quickly and ramp slowly with hysteresis."
+    - "Configured priority processes, battery use, thermal throttling, memory pressure, and disk pressure override idle harvesting."
+
+cli:
+  commands: [init, source_add, source_quarantine, source_retire, source_restore, daemon, pause, resume, status, snapshot_build, qualification_record, maintain, validate, publish]
+  background_rule: "daemon --detach starts the same single-instance worker in a hidden detached Node process."
+  machine_output: json
+  single_instance: true
+
+validation:
+  required:
+    - polyglot_and_sidecar_parity_with_cpp_and_standard_vectors
+    - fixture_can_promote_only_to_integration
+    - crash_resume_without_count_drift
+    - duplicate_source_idempotence
+    - deterministic_snapshot_bytes
+    - malformed_or_partial_snapshot_never_becomes_current
+    - uci_load_selection_searchmoves_fallback_and_replacement
+    - stockfish_fingerprint_and_node_tier_cache_authority
+    - trimming_hysteresis_and_losing_position_relative_score
+    - courtesy_foreground_slowdown_below_2_percent
+    - backoff_within_2_seconds

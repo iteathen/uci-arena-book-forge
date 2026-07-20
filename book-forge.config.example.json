@@ -1,0 +1,39 @@
+{
+  "schema": "flashfork_book_forge_config_v1",
+  "workspace": "E:/book-forge",
+  "policyFile": "policy/strong_rare_v1.policy",
+  "stockfish": "../../third_party/bin/stockfish.exe",
+  "nativeHelper": "native/build/Release/book_forge_guard.exe",
+  "channels": {
+    "integration": true,
+    "qualified": true
+  },
+  "ingestion": {
+    "minimumRating": 2000,
+    "maximumPly": 30,
+    "speeds": ["rapid", "classical"],
+    "chunkGames": 25000,
+    "maximumChunkRecords": 100000,
+    "inboxSettleSeconds": 60
+  },
+  "analysis": {
+    "enabled": true,
+    "initialNodes": 250000,
+    "confirmationNodes": 2000000,
+    "threadsPerWorker": 1,
+    "hashMbPerWorker": 128,
+    "maximumWorkers": 8
+  },
+  "resources": {
+    "minimumFreeWorkspaceGb": 75,
+    "pauseAvailableMemoryGb": 6,
+    "courtesyCpuPercent": 20,
+    "idleCpuPercent": 80,
+    "priorityProcessNames": ["flashfork_uci.exe", "msbuild.exe", "cl.exe"]
+  },
+  "maintenance": {
+    "intervalDays": 30,
+    "detailedCohortRetentionMonths": 24,
+    "snapshotVersionsPerChannel": 4
+  }
+}
