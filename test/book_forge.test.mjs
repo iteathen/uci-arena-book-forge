@@ -13,6 +13,7 @@ import { NativeResourceHelper } from '../src/native_helper.mjs';
 import { publishSnapshot } from '../src/publisher.mjs';
 import { ResourceGovernor } from '../src/resource_governor.mjs';
 import { StockfishWorker } from '../src/stockfish.mjs';
+import { buildTaskXml, quoteWindowsArgument, startupAction, startupTaskName } from '../src/windows_startup.mjs';
 
 async function workspace(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'book-forge-test-'));
@@ -37,6 +38,28 @@ test('Polyglot vectors, canonical FEN, and move encoding match the runtime contr
   assert.equal(polyglotKey(afterE4WithUncapturableEp), 0x823c9b50fd114196n);
   assert.equal(encodePolyglotMove('e2e4'), 0x031c);
   assert.equal(encodePolyglotMove('e1g1'), 0x0107);
+});
+
+test('Windows startup task owns one supervised foreground daemon with absolute paths', async (t) => {
+  const config = await workspace(t);
+  t.after(() => rm(config.workspace, { recursive: true, force: true }));
+  config.workspace = path.join(config.workspace, 'Book & Forge');
+  config.configFile = path.join(config.workspace, 'book forge.config.json');
+  const action = startupAction(config);
+  assert.equal(path.isAbsolute(action.command), true);
+  assert.equal(path.isAbsolute(action.workingDirectory), true);
+  assert.match(action.arguments, / daemon --workspace /);
+  assert.doesNotMatch(action.arguments, /--detach/);
+  assert.equal(quoteWindowsArgument('C:\\plain'), 'C:\\plain');
+  assert.equal(quoteWindowsArgument('C:\\has space\\'), '"C:\\has space\\\\"');
+  const xml = buildTaskXml(config, 'S-1-5-21-100-200-300-1001');
+  assert.match(xml, new RegExp(`<URI>\\\\${startupTaskName}</URI>`));
+  assert.match(xml, /<LogonType>InteractiveToken<\/LogonType>/);
+  assert.match(xml, /<RunLevel>LeastPrivilege<\/RunLevel>/);
+  assert.match(xml, /<MultipleInstancesPolicy>IgnoreNew<\/MultipleInstancesPolicy>/);
+  assert.match(xml, /<ExecutionTimeLimit>PT0S<\/ExecutionTimeLimit>/);
+  assert.match(xml, /<RestartOnFailure>/);
+  assert.match(xml, /Book &amp; Forge/);
 });
 
 test('fixture ingestion is idempotent and creates deterministic integration snapshots only', async (t) => {

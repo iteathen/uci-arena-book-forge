@@ -9,6 +9,7 @@ import { runDaemon } from './daemon.mjs';
 import { registerInput, sha256File } from './ingest.mjs';
 import { runMaintenance } from './maintenance.mjs';
 import { publishSnapshot } from './publisher.mjs';
+import { installWindowsStartup, queryWindowsStartup, readStartupEvidence, uninstallWindowsStartup } from './windows_startup.mjs';
 
 function parseArguments(argv) {
   const positional = [];
@@ -34,7 +35,7 @@ function output(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}
 async function main() {
   const { positional, options } = parseArguments(process.argv.slice(2));
   const [command, subcommand, argument] = positional;
-  if (!command) throw new Error('Usage: book-forge <init|source add|daemon|pause|resume|status|snapshot build|validate|publish>');
+  if (!command) throw new Error('Usage: book-forge <init|source add|daemon|pause|resume|status|snapshot build|qualification record|maintain|validate|publish|startup install|status|uninstall>');
   const config = await loadConfig({ configFile: options.config, workspace: options.workspace });
   if (command === 'validate') {
     output({ ok: true, ...(await validateSnapshot(path.resolve(subcommand))) });
@@ -89,6 +90,12 @@ async function main() {
       output({ ok: true, contentId: options.content, gates: catalog.qualificationGates(options.content) });
     } else if (command === 'maintain') {
       output({ ok: true, maintenance: await runMaintenance(catalog, config, { force: true }) });
+    } else if (command === 'startup' && subcommand === 'install') {
+      output({ ok: true, startup: await installWindowsStartup(config) });
+    } else if (command === 'startup' && subcommand === 'status') {
+      output({ ok: true, startup: await queryWindowsStartup(config), evidence: await readStartupEvidence(config) });
+    } else if (command === 'startup' && subcommand === 'uninstall') {
+      output({ ok: true, startup: await uninstallWindowsStartup(config) });
     } else if (command === 'publish') {
       if (!subcommand) throw new Error('publish requires a snapshot directory');
       output({ ok: true, publication: await publishSnapshot(catalog, config, path.resolve(subcommand), options.channel ?? 'integration') });

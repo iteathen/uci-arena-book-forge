@@ -17,12 +17,19 @@ node tools/book_forge/src/cli.mjs daemon --workspace E:\book-forge --once
 node tools/book_forge/src/cli.mjs status --workspace E:\book-forge --json
 ```
 
-After the bootstrap succeeds, start the continuous worker without a visible
-console window:
+Install the continuous worker as a per-user Windows logon task. Installation is
+idempotent and starts it immediately:
 
 ```powershell
-node tools/book_forge/src/cli.mjs daemon --workspace E:\book-forge --detach
+node tools/book_forge/src/cli.mjs startup install --workspace E:\book-forge
+node tools/book_forge/src/cli.mjs startup status --workspace E:\book-forge
 ```
+
+Task Scheduler runs the foreground daemon directly, without a visible console,
+and restarts it after failure. It uses the current absolute Node, CLI,
+workspace, optional config, and repository paths. To remove the startup entry
+and end its scheduled instance, use `startup uninstall`. `daemon --detach`
+remains available for temporary sessions that are not managed by Windows.
 
 `pause` and `resume` are durable control commands. The daemon runs at low OS
 priority, starts with one persistent one-thread Stockfish worker, backs off on

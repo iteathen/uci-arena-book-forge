@@ -82,6 +82,7 @@ export async function loadConfig({ configFile, workspace } = {}) {
   }
   const config = merge(defaults, loaded);
   config.workspace = path.resolve(workspace ?? process.env.BOOK_FORGE_ROOT ?? config.workspace);
+  config.configFile = configFile ? path.resolve(configFile) : null;
   config.policyFile = resolveConfiguredPath(config.policyFile, configDirectory);
   config.stockfish = resolveConfiguredPath(config.stockfish, configDirectory);
   config.nativeHelper = resolveConfiguredPath(config.nativeHelper, configDirectory);

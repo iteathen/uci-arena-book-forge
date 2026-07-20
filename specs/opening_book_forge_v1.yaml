@@ -132,10 +132,27 @@ resource_governor:
     - "Configured priority processes, battery use, thermal throttling, memory pressure, and disk pressure override idle harvesting."
 
 cli:
-  commands: [init, source_add, source_quarantine, source_retire, source_restore, daemon, pause, resume, status, snapshot_build, qualification_record, maintain, validate, publish]
+  commands: [init, source_add, source_quarantine, source_retire, source_restore, daemon, pause, resume, status, snapshot_build, qualification_record, maintain, validate, publish, startup_install, startup_status, startup_uninstall]
   background_rule: "daemon --detach starts the same single-instance worker in a hidden detached Node process."
   machine_output: json
   single_instance: true
+
+windows_startup:
+  owner: book_forge_cli
+  mechanism: per_user_windows_task_scheduler_logon_task
+  task_name: UCI Arena Book Forge
+  rules:
+    - "startup install registers the absolute current Node executable, Book Forge CLI, workspace, optional config, and repository working directory."
+    - "The scheduled action runs the foreground daemon so Task Scheduler owns process supervision; it must not add a second detach layer."
+    - "The task uses the interactive user token at least privilege, starts after logon, has no execution time limit, and restarts after failure."
+    - "The task allows battery startup because the Book Forge resource governor immediately enters backoff on battery or battery-saver state."
+    - "Multiple task instances are forbidden and the daemon lock remains the final single-instance authority."
+    - "Installation is idempotent, starts the task immediately by default, writes non-secret registration evidence in the workspace, and never embeds credentials."
+    - "startup uninstall ends the scheduled instance, deletes the task, and removes only Book Forge startup-registration evidence."
+  validation:
+    - task_xml_contract_test
+    - install_query_and_immediate_run_smoke
+    - startup_status_reports_registered_absolute_action
 
 validation:
   required:
