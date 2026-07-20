@@ -24,6 +24,31 @@
     "hashMbPerWorker": 128,
     "maximumWorkers": 8
   },
+  "acquisition": {
+    "enabled": true,
+    "provider": "lichess_opening_explorer",
+    "endpoint": "https://explorer.lichess.org/lichess",
+    "tokenFile": "../../secrets/lichess_bot_token.txt",
+    "variant": "standard",
+    "speeds": ["rapid", "classical"],
+    "ratings": [2000, 2200, 2500],
+    "movesPerPosition": 50,
+    "maximumPly": 30,
+    "minimumGames": 32,
+    "crawlLcbGap": 0.1,
+    "requestIntervalMs": 5000,
+    "dailyRequestBudget": 2000,
+    "requestTimeoutMs": 10000,
+    "resourcePollMs": 1000,
+    "publishedRefreshDays": 7,
+    "frontierRefreshDays": 30,
+    "firstPublishPositions": 25,
+    "firstPublishMaxMinutes": 5,
+    "integrationDebounceMinutes": 15
+  },
+  "pgnAudit": {
+    "enabled": false
+  },
   "resources": {
     "minimumFreeWorkspaceGb": 75,
     "pauseAvailableMemoryGb": 6,

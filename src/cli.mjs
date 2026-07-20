@@ -35,7 +35,7 @@ function output(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}
 async function main() {
   const { positional, options } = parseArguments(process.argv.slice(2));
   const [command, subcommand, argument] = positional;
-  if (!command) throw new Error('Usage: book-forge <init|source add|daemon|pause|resume|status|snapshot build|qualification record|maintain|validate|publish|startup install|status|uninstall>');
+  if (!command) throw new Error('Usage: book-forge <init|source <add|quarantine|retire|restore>|acquisition <run|status|retry-auth>|daemon|pause|resume|status|snapshot build|qualification record|maintain|validate|publish|startup <install|status|uninstall>>');
   const config = await loadConfig({ configFile: options.config, workspace: options.workspace });
   if (command === 'validate') {
     output({ ok: true, ...(await validateSnapshot(path.resolve(subcommand))) });
@@ -53,6 +53,17 @@ async function main() {
       if (!argument || !/^\d+$/.test(argument)) throw new Error(`source ${subcommand} requires a numeric source id`);
       const lifecycle = subcommand === 'restore' ? 'restored' : `${subcommand}d`;
       output({ ok: true, source: catalog.setSourceLifecycle(Number(argument), lifecycle) });
+    } else if (command === 'acquisition' && subcommand === 'run') {
+      const maximum = options['max-requests'] === undefined ? undefined : Number(options['max-requests']);
+      if (maximum !== undefined && (!Number.isInteger(maximum) || maximum < 1 || maximum > config.acquisition.dailyRequestBudget)) {
+        throw new Error('acquisition run --max-requests must be a positive integer within the daily request budget');
+      }
+      const report = await runDaemon(catalog, config, { once: true, acquisitionMaxRequests: maximum, acquisitionOnly: true });
+      output({ ok: true, acquisition: report.acquisition });
+    } else if (command === 'acquisition' && subcommand === 'status') {
+      output({ ok: true, acquisition: catalog.acquisitionStatus(), daemon: catalog.daemonState() });
+    } else if (command === 'acquisition' && subcommand === 'retry-auth') {
+      output({ ok: true, retried: catalog.retryAcquisitionAuth(), acquisition: catalog.acquisitionStatus() });
     } else if (command === 'daemon') {
       if (options.detach) {
         const childArguments = [fileURLToPath(import.meta.url), 'daemon', '--workspace', config.workspace];

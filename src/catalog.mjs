@@ -3,8 +3,8 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { shardForKey } from './chess.mjs';
 
-const CATALOG_SCHEMA = 3;
-const SHARD_SCHEMA = 2;
+const CATALOG_SCHEMA = 4;
+const SHARD_SCHEMA = 3;
 
 function transaction(database, action) {
   database.exec('BEGIN IMMEDIATE');
@@ -36,6 +36,8 @@ export class Catalog {
       CREATE TABLE IF NOT EXISTS sources (
         id INTEGER PRIMARY KEY, sha256 TEXT NOT NULL UNIQUE, source_path TEXT NOT NULL,
         source_type TEXT NOT NULL, fixture INTEGER NOT NULL DEFAULT 0,
+        overlap_domain TEXT NOT NULL DEFAULT '',
+        contribution_mode TEXT NOT NULL DEFAULT 'additive' CHECK(contribution_mode IN ('additive','audit_only')),
         status TEXT NOT NULL CHECK(status IN ('pending','processing','complete','error')),
         lifecycle TEXT NOT NULL DEFAULT 'active' CHECK(lifecycle IN ('active','quarantined','retired','restored')),
         games_seen INTEGER NOT NULL DEFAULT 0, games_accepted INTEGER NOT NULL DEFAULT 0,
@@ -61,16 +63,60 @@ export class Catalog {
         sha256 TEXT NOT NULL, source_id INTEGER NOT NULL, discovered_at TEXT NOT NULL,
         FOREIGN KEY(source_id) REFERENCES sources(id)
       ) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS acquisition_datasets (
+        id INTEGER PRIMARY KEY, provider TEXT NOT NULL, overlap_domain TEXT NOT NULL,
+        contribution_mode TEXT NOT NULL CHECK(contribution_mode IN ('authoritative','audit_only')),
+        query_json TEXT NOT NULL, query_digest TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS acquisition_authoritative_domain_idx
+        ON acquisition_datasets(overlap_domain) WHERE contribution_mode='authoritative';
+      CREATE TABLE IF NOT EXISTS acquisition_frontier (
+        dataset_id INTEGER NOT NULL, fingerprint BLOB NOT NULL, fen TEXT NOT NULL, ply INTEGER NOT NULL,
+        parent_fingerprint BLOB, via_move TEXT, state TEXT NOT NULL DEFAULT 'queued'
+          CHECK(state IN ('queued','in_flight','ready','backoff','auth_blocked')),
+        priority REAL NOT NULL DEFAULT 0, published INTEGER NOT NULL DEFAULT 0,
+        first_seen_at TEXT NOT NULL, last_queried_at TEXT,
+        next_due_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
+        last_http_status INTEGER, error TEXT NOT NULL DEFAULT '', response_digest TEXT,
+        PRIMARY KEY(dataset_id,fingerprint),
+        FOREIGN KEY(dataset_id) REFERENCES acquisition_datasets(id)
+      ) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS acquisition_frontier_due_idx
+        ON acquisition_frontier(dataset_id,state,next_due_at,ply,priority);
+      CREATE TABLE IF NOT EXISTS acquisition_request_budget (
+        utc_day TEXT PRIMARY KEY, requests INTEGER NOT NULL
+      ) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS daemon_state (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1), pid INTEGER, phase TEXT NOT NULL DEFAULT 'stopped',
+        started_at TEXT, heartbeat_at TEXT, cycle_started_at TEXT, cycle_completed_at TEXT,
+        resource_mode TEXT NOT NULL DEFAULT '', last_report TEXT NOT NULL DEFAULT '{}',
+        last_error TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL
+      );
       INSERT OR IGNORE INTO control(singleton, paused, reason, updated_at)
         VALUES(1, 0, '', strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+      INSERT OR IGNORE INTO daemon_state(singleton,updated_at)
+        VALUES(1,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
     `);
     const storedVersion = this.database.prepare('SELECT value FROM metadata WHERE key=?').get('schema_version');
     let catalogVersion = Number(storedVersion?.value ?? 0);
     if (catalogVersion === 1) {
-      this.database.exec("ALTER TABLE sources ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'active' CHECK(lifecycle IN ('active','quarantined','retired','restored'))");
+      const columns = new Set(this.database.prepare('PRAGMA table_info(sources)').all().map((column) => column.name));
+      if (!columns.has('lifecycle')) {
+        this.database.exec("ALTER TABLE sources ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'active' CHECK(lifecycle IN ('active','quarantined','retired','restored'))");
+      }
       catalogVersion = 2;
     }
     if (catalogVersion === 2) catalogVersion = 3;
+    if (catalogVersion === 3) {
+      const columns = new Set(this.database.prepare('PRAGMA table_info(sources)').all().map((column) => column.name));
+      if (!columns.has('overlap_domain')) this.database.exec("ALTER TABLE sources ADD COLUMN overlap_domain TEXT NOT NULL DEFAULT ''");
+      if (!columns.has('contribution_mode')) {
+        this.database.exec("ALTER TABLE sources ADD COLUMN contribution_mode TEXT NOT NULL DEFAULT 'additive' CHECK(contribution_mode IN ('additive','audit_only'))");
+      }
+      this.database.exec("UPDATE sources SET overlap_domain='manual:' || sha256 WHERE overlap_domain=''");
+      catalogVersion = 4;
+    }
     if (!storedVersion) {
       this.database.prepare('INSERT INTO metadata(key,value) VALUES(?,?)').run('schema_version', String(CATALOG_SCHEMA));
     } else if (catalogVersion === CATALOG_SCHEMA) {
@@ -114,13 +160,25 @@ export class Catalog {
         pv TEXT NOT NULL, lifecycle TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL,
         PRIMARY KEY(fingerprint, raw_move, engine_fingerprint, node_tier)
       ) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS remote_observations (
+        dataset_id INTEGER NOT NULL, fingerprint BLOB NOT NULL, raw_move INTEGER NOT NULL,
+        uci_move TEXT NOT NULL, games INTEGER NOT NULL, wins INTEGER NOT NULL, draws INTEGER NOT NULL,
+        losses INTEGER NOT NULL, average_rating INTEGER NOT NULL, observed_at TEXT NOT NULL,
+        response_digest TEXT NOT NULL,
+        PRIMARY KEY(dataset_id, fingerprint, raw_move)
+      ) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS remote_observations_position_idx
+        ON remote_observations(fingerprint, raw_move);
     `);
     const storedVersion = database.prepare('SELECT value FROM metadata WHERE key=?').get('schema_version');
     if (storedVersion && Number(storedVersion.value) === 1) {
-      database.exec('ALTER TABLE evaluations ADD COLUMN relative_loss_cp INTEGER');
+      const columns = new Set(database.prepare('PRAGMA table_info(evaluations)').all().map((column) => column.name));
+      if (!columns.has('relative_loss_cp')) database.exec('ALTER TABLE evaluations ADD COLUMN relative_loss_cp INTEGER');
       database.prepare('UPDATE metadata SET value=? WHERE key=?').run(String(SHARD_SCHEMA), 'schema_version');
     } else if (!storedVersion) {
       database.prepare('INSERT INTO metadata(key,value) VALUES(?,?)').run('schema_version', String(SHARD_SCHEMA));
+    } else if (Number(storedVersion.value) === 2) {
+      database.prepare('UPDATE metadata SET value=? WHERE key=?').run(String(SHARD_SCHEMA), 'schema_version');
     } else if (Number(storedVersion.value) !== SHARD_SCHEMA) {
       throw new Error(`Unsupported shard schema ${storedVersion.value}`);
     }
@@ -136,12 +194,13 @@ export class Catalog {
     return indexes;
   }
 
-  registerSource({ sha256, sourcePath, sourceType, fixture = false }) {
+  registerSource({ sha256, sourcePath, sourceType, fixture = false, overlapDomain = `manual:${sha256}`, contributionMode = 'additive' }) {
+    if (!['additive', 'audit_only'].includes(contributionMode)) throw new Error(`Invalid source contribution mode ${contributionMode}`);
     const now = new Date().toISOString();
     this.database.prepare(`
-      INSERT OR IGNORE INTO sources(sha256,source_path,source_type,fixture,status,created_at,updated_at)
-      VALUES(?,?,?,?, 'pending',?,?)
-    `).run(sha256, sourcePath, sourceType, fixture ? 1 : 0, now, now);
+      INSERT OR IGNORE INTO sources(sha256,source_path,source_type,fixture,overlap_domain,contribution_mode,status,created_at,updated_at)
+      VALUES(?,?,?,?,?,?, 'pending',?,?)
+    `).run(sha256, sourcePath, sourceType, fixture ? 1 : 0, overlapDomain, contributionMode, now, now);
     return this.database.prepare('SELECT * FROM sources WHERE sha256=?').get(sha256);
   }
 
@@ -218,27 +277,242 @@ export class Catalog {
   }
 
   aggregateObservations({ includeFixtures }) {
-    const aggregate = [];
+    const aggregate = new Map();
+    const mergeRow = (row) => {
+      const fingerprint = Buffer.from(row.fingerprint);
+      const identity = `${fingerprint.toString('hex')}:${row.raw_move}`;
+      let current = aggregate.get(identity);
+      if (!current) {
+        const keyBytes = Buffer.from(row.polyglot_key);
+        current = {
+          fingerprint, keyBuffer: keyBytes, key: keyBytes.readBigUInt64BE(), fen: row.fen,
+          rawMove: Number(row.raw_move), uciMove: row.uci_move, games: 0, wins: 0, draws: 0, losses: 0,
+        };
+        aggregate.set(identity, current);
+      }
+      current.games += Number(row.games);
+      current.wins += Number(row.wins);
+      current.draws += Number(row.draws);
+      current.losses += Number(row.losses);
+    };
     for (const index of this.existingShardIndexes()) {
-      const rows = this.shard(index).prepare(`
+      const database = this.shard(index);
+      const localRows = database.prepare(`
         SELECT o.raw_move,MIN(o.uci_move) AS uci_move,SUM(o.games) AS games,SUM(o.wins) AS wins,
                SUM(o.draws) AS draws,SUM(o.losses) AS losses,p.fingerprint,p.polyglot_key,p.fen
         FROM observations o
         JOIN positions p ON p.fingerprint=o.fingerprint
         JOIN forge_catalog.sources s ON s.id=o.source_id
-        WHERE s.status='complete' AND s.lifecycle IN ('active','restored') AND (? OR s.fixture=0)
+        WHERE s.status='complete' AND s.lifecycle IN ('active','restored') AND s.contribution_mode='additive'
+          AND (? OR s.fixture=0)
         GROUP BY o.fingerprint,o.raw_move
       `).all(includeFixtures ? 1 : 0);
-      for (const row of rows) {
-        const keyBytes = Buffer.from(row.polyglot_key);
-        aggregate.push({
-          fingerprint: Buffer.from(row.fingerprint), keyBuffer: keyBytes,
-          key: keyBytes.readBigUInt64BE(), fen: row.fen, rawMove: Number(row.raw_move), uciMove: row.uci_move,
-          games: Number(row.games), wins: Number(row.wins), draws: Number(row.draws), losses: Number(row.losses),
-        });
-      }
+      for (const row of localRows) mergeRow(row);
+      const remoteRows = database.prepare(`
+        SELECT r.raw_move,MIN(r.uci_move) AS uci_move,SUM(r.games) AS games,SUM(r.wins) AS wins,
+               SUM(r.draws) AS draws,SUM(r.losses) AS losses,p.fingerprint,p.polyglot_key,p.fen
+        FROM remote_observations r
+        JOIN positions p ON p.fingerprint=r.fingerprint
+        JOIN forge_catalog.acquisition_datasets d ON d.id=r.dataset_id
+        WHERE d.contribution_mode='authoritative'
+        GROUP BY r.fingerprint,r.raw_move
+      `).all();
+      for (const row of remoteRows) mergeRow(row);
     }
-    return aggregate;
+    return [...aggregate.values()];
+  }
+
+  hasPublishableObservations({ includeFixtures = true } = {}) {
+    if (this.completedSources().some((source) => source.contribution_mode === 'additive' && (includeFixtures || !source.fixture))) return true;
+    for (const index of this.existingShardIndexes()) {
+      const row = this.shard(index).prepare(`
+        SELECT 1 FROM remote_observations r
+        JOIN forge_catalog.acquisition_datasets d ON d.id=r.dataset_id
+        WHERE d.contribution_mode='authoritative' LIMIT 1
+      `).get();
+      if (row) return true;
+    }
+    return false;
+  }
+
+  ensureAcquisitionDataset({ provider, overlapDomain, contributionMode, queryJson, queryDigest }) {
+    if (!['authoritative', 'audit_only'].includes(contributionMode)) throw new Error(`Invalid acquisition contribution mode ${contributionMode}`);
+    const now = new Date().toISOString();
+    return transaction(this.database, () => {
+      const existing = this.database.prepare('SELECT * FROM acquisition_datasets WHERE query_digest=?').get(queryDigest);
+      if (contributionMode === 'authoritative') {
+        this.database.prepare(`UPDATE acquisition_datasets SET contribution_mode='audit_only',updated_at=?
+          WHERE overlap_domain=? AND contribution_mode='authoritative' AND id<>?`).run(now, overlapDomain, existing?.id ?? -1);
+      }
+      if (existing) {
+        this.database.prepare(`UPDATE acquisition_datasets SET provider=?,overlap_domain=?,contribution_mode=?,query_json=?,updated_at=? WHERE id=?`)
+          .run(provider, overlapDomain, contributionMode, queryJson, now, existing.id);
+        return this.database.prepare('SELECT * FROM acquisition_datasets WHERE id=?').get(existing.id);
+      }
+      const result = this.database.prepare(`
+        INSERT INTO acquisition_datasets(provider,overlap_domain,contribution_mode,query_json,query_digest,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?)
+      `).run(provider, overlapDomain, contributionMode, queryJson, queryDigest, now, now);
+      return this.database.prepare('SELECT * FROM acquisition_datasets WHERE id=?').get(result.lastInsertRowid);
+    });
+  }
+
+  acquisitionDataset(id) { return this.database.prepare('SELECT * FROM acquisition_datasets WHERE id=?').get(id); }
+
+  enqueueFrontier(datasetId, { fingerprint, fen, ply, parentFingerprint = null, viaMove = null, priority = 0 }) {
+    const now = new Date().toISOString();
+    this.database.prepare(`
+      INSERT INTO acquisition_frontier(dataset_id,fingerprint,fen,ply,parent_fingerprint,via_move,priority,first_seen_at,next_due_at)
+      VALUES(?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(dataset_id,fingerprint) DO UPDATE SET
+        priority=MAX(acquisition_frontier.priority,excluded.priority),
+        ply=MIN(acquisition_frontier.ply,excluded.ply)
+    `).run(datasetId, fingerprint, fen, ply, parentFingerprint, viaMove, priority, now, now);
+  }
+
+  recoverAcquisitionWork(datasetId) {
+    this.database.prepare(`UPDATE acquisition_frontier SET state='queued',next_due_at=?,error='recovered interrupted request'
+      WHERE dataset_id=? AND state='in_flight'`).run(new Date().toISOString(), datasetId);
+  }
+
+  nextFrontier(datasetId, now = new Date()) {
+    return this.database.prepare(`
+      SELECT * FROM acquisition_frontier
+      WHERE dataset_id=? AND state IN ('queued','ready','backoff','auth_blocked') AND next_due_at<=?
+      ORDER BY (last_queried_at IS NOT NULL) ASC,
+        CASE WHEN last_queried_at IS NULL THEN ply ELSE 0 END ASC,
+        CASE WHEN last_queried_at IS NULL THEN priority ELSE 0 END DESC,
+        published DESC, next_due_at ASC, hex(fingerprint) ASC
+      LIMIT 1
+    `).get(datasetId, now.toISOString());
+  }
+
+  markFrontierAttempt(datasetId, fingerprint) {
+    this.database.prepare(`UPDATE acquisition_frontier SET state='in_flight',attempts=attempts+1,error=''
+      WHERE dataset_id=? AND fingerprint=?`).run(datasetId, fingerprint);
+  }
+
+  completeFrontier(datasetId, fingerprint, { responseDigest, httpStatus = 200, refreshDays }) {
+    const now = new Date();
+    const nextDue = new Date(now.getTime() + refreshDays * 86_400_000);
+    this.database.prepare(`UPDATE acquisition_frontier SET state='ready',last_queried_at=?,next_due_at=?,
+      failures=0,last_http_status=?,error='',response_digest=? WHERE dataset_id=? AND fingerprint=?`)
+      .run(now.toISOString(), nextDue.toISOString(), httpStatus, responseDigest, datasetId, fingerprint);
+  }
+
+  markPublishedFrontier(records) {
+    transaction(this.database, () => {
+      this.database.prepare(`UPDATE acquisition_frontier SET published=0 WHERE dataset_id IN
+        (SELECT id FROM acquisition_datasets WHERE contribution_mode='authoritative')`).run();
+      const update = this.database.prepare(`UPDATE acquisition_frontier SET published=1 WHERE fingerprint=? AND dataset_id IN
+        (SELECT id FROM acquisition_datasets WHERE contribution_mode='authoritative')`);
+      for (const identity of new Set(records.map((record) => record.fingerprint.toString('hex')))) update.run(Buffer.from(identity, 'hex'));
+    });
+  }
+
+  failFrontier(datasetId, fingerprint, { state = 'backoff', httpStatus = null, error = '', nextDueAt }) {
+    this.database.prepare(`UPDATE acquisition_frontier SET state=?,failures=failures+1,last_http_status=?,error=?,next_due_at=?
+      WHERE dataset_id=? AND fingerprint=?`).run(state, httpStatus, String(error).slice(0, 512), nextDueAt, datasetId, fingerprint);
+  }
+
+  retryAcquisitionAuth() {
+    const now = new Date().toISOString();
+    return Number(this.database.prepare(`UPDATE acquisition_frontier SET state='queued',next_due_at=?,error=''
+      WHERE state='auth_blocked'`).run(now).changes);
+  }
+
+  acquisitionRequestsToday(utcDay = new Date().toISOString().slice(0, 10)) {
+    return Number(this.database.prepare('SELECT requests FROM acquisition_request_budget WHERE utc_day=?').get(utcDay)?.requests ?? 0);
+  }
+
+  consumeAcquisitionRequest(limit, utcDay = new Date().toISOString().slice(0, 10)) {
+    return transaction(this.database, () => {
+      const used = this.acquisitionRequestsToday(utcDay);
+      if (used >= limit) return false;
+      this.database.prepare(`INSERT INTO acquisition_request_budget(utc_day,requests) VALUES(?,1)
+        ON CONFLICT(utc_day) DO UPDATE SET requests=requests+1`).run(utcDay);
+      this.database.prepare('DELETE FROM acquisition_request_budget WHERE utc_day<?').run(utcDay);
+      return true;
+    });
+  }
+
+  replaceRemotePosition(datasetId, position, records, responseDigest) {
+    const database = this.shard(shardForKey(position.key));
+    transaction(database, () => {
+      database.prepare(`INSERT INTO positions(fingerprint,polyglot_key,fen) VALUES(?,?,?)
+        ON CONFLICT(fingerprint) DO UPDATE SET polyglot_key=excluded.polyglot_key,fen=excluded.fen`)
+        .run(position.fingerprint, position.keyBuffer, position.fen);
+      database.prepare('DELETE FROM remote_observations WHERE dataset_id=? AND fingerprint=?').run(datasetId, position.fingerprint);
+      const insert = database.prepare(`
+        INSERT INTO remote_observations(dataset_id,fingerprint,raw_move,uci_move,games,wins,draws,losses,average_rating,observed_at,response_digest)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+      `);
+      const observedAt = new Date().toISOString();
+      for (const record of records) {
+        insert.run(datasetId, position.fingerprint, record.rawMove, record.uciMove, record.games, record.wins,
+          record.draws, record.losses, record.averageRating, observedAt, responseDigest);
+      }
+    });
+  }
+
+  acquisitionEvidence() {
+    return this.database.prepare(`
+      SELECT id,provider,overlap_domain,contribution_mode,query_digest,query_json,created_at,updated_at
+      FROM acquisition_datasets ORDER BY provider,query_digest
+    `).all().map((row) => ({ ...row, id: Number(row.id), query: JSON.parse(row.query_json) }));
+  }
+
+  acquisitionDatasetHasObservations(datasetId) {
+    for (const index of this.existingShardIndexes()) {
+      if (this.shard(index).prepare('SELECT 1 FROM remote_observations WHERE dataset_id=? LIMIT 1').get(datasetId)) return true;
+    }
+    return false;
+  }
+
+  acquisitionStatus() {
+    const grouped = this.database.prepare(`SELECT f.state,COUNT(*) AS count FROM acquisition_frontier f
+      JOIN acquisition_datasets d ON d.id=f.dataset_id WHERE d.contribution_mode='authoritative'
+      GROUP BY f.state ORDER BY f.state`).all()
+      .map((row) => ({ state: row.state, count: Number(row.count) }));
+    const totals = this.database.prepare(`SELECT COUNT(*) AS frontier_positions,
+      SUM(CASE WHEN f.last_queried_at IS NOT NULL THEN 1 ELSE 0 END) AS positions,MAX(f.last_queried_at) AS last_success_at,
+      MIN(CASE WHEN f.state IN ('queued','ready','backoff','auth_blocked') THEN f.next_due_at END) AS next_request_at
+      FROM acquisition_frontier f JOIN acquisition_datasets d ON d.id=f.dataset_id
+      WHERE d.contribution_mode='authoritative'`).get();
+    const last = this.database.prepare(`SELECT f.last_http_status,f.error,f.state FROM acquisition_frontier f
+      JOIN acquisition_datasets d ON d.id=f.dataset_id
+      WHERE d.contribution_mode='authoritative' AND f.attempts>0
+      ORDER BY COALESCE(f.last_queried_at,f.next_due_at) DESC LIMIT 1`).get();
+    return {
+      enabled: Boolean(this.config.acquisition.enabled), provider: this.config.acquisition.provider,
+      credentialConfigured: Boolean(this.config.acquisition.tokenFile), requestsToday: this.acquisitionRequestsToday(),
+      dailyRequestBudget: this.config.acquisition.dailyRequestBudget, frontier: grouped,
+      positions: Number(totals.positions ?? 0), frontierPositions: Number(totals.frontier_positions),
+      lastSuccessAt: totals.last_success_at, nextRequestAt: totals.next_request_at,
+      authState: grouped.some((entry) => entry.state === 'auth_blocked') ? 'blocked' : 'ready',
+      lastHttpStatus: last?.last_http_status ?? null, backoffReason: last?.error ?? '',
+    };
+  }
+
+  updateDaemonState(patch) {
+    const current = this.database.prepare('SELECT * FROM daemon_state WHERE singleton=1').get();
+    const value = { ...current, ...patch, singleton: 1, updated_at: new Date().toISOString() };
+    if (typeof value.last_report !== 'string') value.last_report = JSON.stringify(value.last_report ?? {});
+    if (value.last_report.length > 65_536) value.last_report = JSON.stringify({ truncated: true, bytes: value.last_report.length });
+    this.database.prepare(`UPDATE daemon_state SET pid=?,phase=?,started_at=?,heartbeat_at=?,cycle_started_at=?,
+      cycle_completed_at=?,resource_mode=?,last_report=?,last_error=?,updated_at=? WHERE singleton=1`)
+      .run(value.pid, value.phase, value.started_at, value.heartbeat_at, value.cycle_started_at,
+        value.cycle_completed_at, value.resource_mode, value.last_report,
+        String(value.last_error ?? '').slice(0, 2048), value.updated_at);
+  }
+
+  daemonState() {
+    const row = this.database.prepare('SELECT * FROM daemon_state WHERE singleton=1').get();
+    const heartbeatMs = Date.parse(row.heartbeat_at ?? '');
+    return { pid: row.pid === null ? null : Number(row.pid), phase: row.phase, startedAt: row.started_at,
+      heartbeatAt: row.heartbeat_at, cycleStartedAt: row.cycle_started_at, cycleCompletedAt: row.cycle_completed_at,
+      resourceMode: row.resource_mode, lastReport: JSON.parse(row.last_report || '{}'), lastError: row.last_error,
+      stale: !Number.isFinite(heartbeatMs) || Date.now() - heartbeatMs > 300_000 };
   }
 
   putEvaluation(record) {
@@ -360,7 +634,9 @@ export class Catalog {
     const channels = this.database.prepare('SELECT * FROM channels ORDER BY channel').all();
     const snapshots = this.database.prepare('SELECT COUNT(*) AS count FROM snapshots').get();
     const qualificationGates = this.database.prepare('SELECT COUNT(*) AS count FROM qualification_gates WHERE passed=1').get();
-    return { schema: 'flashfork_book_forge_status_v1', workspace: this.config.workspace, control: this.control(), sources, channels,
-      snapshots: Number(snapshots.count), passingQualificationGates: Number(qualificationGates.count) };
+    return { schema: 'flashfork_book_forge_status_v2', workspace: this.config.workspace, control: this.control(), sources, channels,
+      snapshots: Number(snapshots.count), passingQualificationGates: Number(qualificationGates.count),
+      daemon: this.daemonState(), acquisition: this.acquisitionStatus(),
+      audit: { enabled: Boolean(this.config.pgnAudit.enabled), status: this.config.pgnAudit.enabled ? 'not_implemented' : 'disabled' } };
   }
 }

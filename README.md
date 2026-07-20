@@ -5,6 +5,13 @@ snapshots. It owns ingestion, durable observations, optional Stockfish
 qualification, bounded maintenance, deterministic compilation, validation, and
 automatic publication. It does not import or call UCI Arena internals.
 
+The default daemon continuously sips aggregate positions from the authenticated
+Lichess Opening Explorer. It queries standard rapid/classical games in the
+2000, 2200, and 2500 rating groups, advances a durable rarity/LCB-prioritized
+frontier through ply 30, and feeds the same local Stockfish and snapshot
+pipeline used by file sources. The token is read only from its configured file
+and is never included in status, logs, task actions, or snapshot provenance.
+
 Requires Node.js 24.15 or newer. Install the locked dependencies with
 `npm ci --prefix tools/book_forge`.
 
@@ -16,6 +23,22 @@ node tools/book_forge/src/cli.mjs source add --workspace E:\book-forge --fixture
 node tools/book_forge/src/cli.mjs daemon --workspace E:\book-forge --once
 node tools/book_forge/src/cli.mjs status --workspace E:\book-forge --json
 ```
+
+Inspect or manually advance remote acquisition:
+
+```powershell
+node tools/book_forge/src/cli.mjs acquisition status --workspace E:\book-forge
+node tools/book_forge/src/cli.mjs acquisition run --workspace E:\book-forge --max-requests 1
+node tools/book_forge/src/cli.mjs acquisition retry-auth --workspace E:\book-forge
+```
+
+Acquisition is default-on, permits only one request at a time, waits at least
+five seconds between requests, and persists a 2,000-request UTC daily budget.
+HTTP 429 responses pause for at least one minute; authentication failures open
+a visible six-hour circuit without stopping the daemon. Every refreshed
+position atomically replaces its earlier cumulative totals, and overlap-domain
+authority prevents a future Lichess PGN audit from double-counting Explorer
+statistics.
 
 Install the continuous worker as a per-user Windows logon task. Installation is
 idempotent and starts it immediately:
@@ -39,6 +62,13 @@ per-position/two-million-record export caps are enabled by default. Monthly
 maintenance consolidates cohorts older than 24 months without losing source
 identity, drops obsolete retired PV text, and retains four snapshot generations
 per channel. Publishing identical content is a no-op.
+
+`status` includes the current acquisition frontier and request budget plus the
+daemon phase, heartbeat, cycle timestamps, and bounded last-cycle report. The
+native supervisor terminates a daemon whose heartbeat is stale for five
+minutes, allowing Task Scheduler to restart it. Monthly `.pgn.zst` streaming is
+reserved as a default-off audit source; it is not required for Explorer-backed
+book growth and can never contribute overlapping counts to a publication.
 
 The producer is Node-only. On Windows, an optional tiny native resource guard
 adds Job Object cleanup, EcoQoS/very-low I/O priority, battery state, and real

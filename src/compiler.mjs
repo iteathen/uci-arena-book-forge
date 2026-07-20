@@ -2,37 +2,9 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { encodePolyglotMove, legalUciMove, keyHex, moveHex, polyglotKey } from './chess.mjs';
+import { parsePolicy, scoreSiblingCandidates } from './book_policy.mjs';
 
-const requiredPolicyKeys = new Set([
-  'prior_games', 'draw_value', 'confidence_standard_errors', 'minimum_games', 'maximum_lcb_gap',
-  'quality_exponent', 'maximum_rarity_multiplier', 'exit_intercept', 'exit_depth_weight',
-  'exit_advantage_weight', 'exit_disadvantage_weight', 'exit_weakness_weight', 'eval_deadband_cp',
-  'eval_scale_cp', 'depth_start_ply', 'depth_span_plies',
-]);
-
-export function parsePolicy(text) {
-  const policy = {};
-  for (const original of text.split(/\r?\n/)) {
-    const line = original.trim();
-    if (!line || line.startsWith('#')) continue;
-    const separator = line.indexOf('=');
-    if (separator <= 0) throw new Error(`Malformed policy line: ${original}`);
-    const key = line.slice(0, separator).trim();
-    if (!requiredPolicyKeys.has(key)) throw new Error(`Unknown policy key: ${key}`);
-    if (Object.hasOwn(policy, key)) throw new Error(`Duplicate policy key: ${key}`);
-    const value = Number(line.slice(separator + 1).trim());
-    if (!Number.isFinite(value)) throw new Error(`Invalid policy value for ${key}`);
-    policy[key] = value;
-  }
-  for (const key of requiredPolicyKeys) if (!Object.hasOwn(policy, key)) throw new Error(`Missing policy key: ${key}`);
-  if (policy.prior_games < 0 || policy.draw_value < 0 || policy.draw_value > 1 ||
-      policy.confidence_standard_errors < 0 || !Number.isInteger(policy.minimum_games) || policy.minimum_games < 1 ||
-      policy.maximum_lcb_gap <= 0 || policy.quality_exponent < 0 || policy.maximum_rarity_multiplier < 1 ||
-      policy.eval_scale_cp <= 0 || policy.depth_span_plies <= 0) {
-    throw new Error('Policy values violate the opening-book numeric contract');
-  }
-  return policy;
-}
+export { parsePolicy } from './book_policy.mjs';
 
 export function fnv1a64(bytes) {
   let value = 0xcbf29ce484222325n;
@@ -54,26 +26,7 @@ function compileCandidates(observations, policy) {
   }
   const selected = [];
   for (const siblings of groups.values()) {
-    const totalGames = siblings.reduce((sum, row) => sum + row.games, 0);
-    const scoredPoints = siblings.reduce((sum, row) => sum + row.wins + policy.draw_value * row.draws, 0);
-    const positionMean = totalGames > 0 ? scoredPoints / totalGames : 0.5;
-    for (const row of siblings) {
-      row.posterior = (row.wins + policy.draw_value * row.draws + policy.prior_games * positionMean) /
-        (row.games + policy.prior_games);
-      row.standardError = Math.sqrt(row.posterior * (1 - row.posterior) / (row.games + policy.prior_games + 1));
-      row.lcb = row.posterior - policy.confidence_standard_errors * row.standardError;
-    }
-    const bestLcb = Math.max(...siblings.map((row) => row.lcb));
-    const maxGames = Math.max(...siblings.map((row) => row.games));
-    const eligible = siblings.filter((row) => row.games >= policy.minimum_games && row.lcb >= bestLcb - policy.maximum_lcb_gap);
-    for (const row of eligible) {
-      const quality = Math.max(0, Math.min(1, (row.lcb - (bestLcb - policy.maximum_lcb_gap)) / policy.maximum_lcb_gap));
-      const rarity = Math.min(policy.maximum_rarity_multiplier, Math.sqrt(maxGames / (row.games + 1)));
-      row.quality = quality;
-      row.rarity = rarity;
-      row.qualityWeight = Math.max(1e-9, quality ** policy.quality_exponent);
-      row.selectionWeight = row.qualityWeight * rarity;
-    }
+    const { eligible } = scoreSiblingCandidates(siblings, policy);
     eligible.sort((left, right) => right.selectionWeight - left.selectionWeight || right.lcb - left.lcb || left.rawMove - right.rawMove);
     selected.push(...eligible.slice(0, 6));
   }
@@ -84,6 +37,29 @@ function compileCandidates(observations, policy) {
   }
   selected.sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : left.rawMove - right.rawMove);
   return selected;
+}
+
+function scalePublishedCounts(records) {
+  const groups = new Map();
+  for (const record of records) {
+    const identity = record.fingerprint.toString('hex');
+    if (!groups.has(identity)) groups.set(identity, []);
+    groups.get(identity).push(record);
+  }
+  for (const siblings of groups.values()) {
+    const factor = Math.max(1, Math.ceil(Math.max(...siblings.map((record) => record.games)) / 0xffff_ffff));
+    if (factor === 1) continue;
+    for (const record of siblings) {
+      const target = Math.max(1, Math.floor(record.games / factor));
+      const exact = [record.wins, record.draws, record.losses].map((value) => value * target / record.games);
+      const scaled = exact.map(Math.floor);
+      let remainder = target - scaled.reduce((sum, value) => sum + value, 0);
+      const order = [0, 1, 2].sort((left, right) => (exact[right] - scaled[right]) - (exact[left] - scaled[left]) || left - right);
+      for (let index = 0; remainder > 0; index = (index + 1) % order.length) { scaled[order[index]] += 1; remainder -= 1; }
+      [record.wins, record.draws, record.losses] = scaled;
+      record.games = target;
+    }
+  }
 }
 
 function polyglotBytes(records) {
@@ -199,6 +175,8 @@ export async function buildSnapshot(catalog, config, channel = 'integration') {
   });
   const records = compileCandidates(observations, policy);
   if (records.length === 0) throw new Error('No observations satisfy the opening-book policy');
+  const metrics = qualificationMetrics(records);
+  scalePublishedCounts(records);
   for (const record of records) {
     for (const value of [record.games, record.wins, record.draws, record.losses]) {
       if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff) throw new Error('Observation counts exceed the ffstats u32 contract');
@@ -213,17 +191,25 @@ export async function buildSnapshot(catalog, config, channel = 'integration') {
   const book = polyglotBytes(records);
   const stats = statsBytes(records, book);
   const audit = auditBytes(records, evaluations);
-  const sourceEvidence = catalog.completedSources().filter((source) => includeFixtures || !source.fixture).map((source) => ({
+  const localEvidence = catalog.completedSources()
+    .filter((source) => source.contribution_mode === 'additive' && (includeFixtures || !source.fixture)).map((source) => ({
     sha256: source.sha256, source_type: source.source_type, fixture: Boolean(source.fixture),
+    overlap_domain: source.overlap_domain, contribution_mode: source.contribution_mode,
     games_seen: Number(source.games_seen), games_accepted: Number(source.games_accepted), chunks: Number(source.chunks),
-  })).sort((left, right) => left.sha256 < right.sha256 ? -1 : left.sha256 > right.sha256 ? 1 : 0);
+  }));
+  const remoteEvidence = catalog.acquisitionEvidence()
+    .filter((source) => source.contribution_mode === 'authoritative' && catalog.acquisitionDatasetHasObservations(source.id)).map((source) => ({
+    sha256: source.query_digest, source_type: source.provider, fixture: false,
+    overlap_domain: source.overlap_domain, contribution_mode: source.contribution_mode, query: source.query,
+  }));
+  const sourceEvidence = [...localEvidence, ...remoteEvidence]
+    .sort((left, right) => left.sha256 < right.sha256 ? -1 : left.sha256 > right.sha256 ? 1 : 0);
   const corpusFilter = {
     variant: 'standard', speeds: [...config.ingestion.speeds].sort(), minimum_rating_both: config.ingestion.minimumRating,
     maximum_ply: config.ingestion.maximumPly, require_normal_result: true,
   };
   const provenanceBytes = Buffer.from(JSON.stringify({ source_evidence: sourceEvidence, corpus_filter: corpusFilter }), 'utf8');
   const contentIdentity = sha256(Buffer.concat([book, stats, policyBytes, audit, provenanceBytes])).slice(0, 20);
-  const metrics = qualificationMetrics(records);
   if (channel === 'qualified') {
     const errors = qualificationErrors(catalog, config, records, contentIdentity, metrics);
     if (errors.length) throw new Error(`Qualified publication blocked: ${errors.join('; ')}`);
@@ -248,6 +234,7 @@ export async function buildSnapshot(catalog, config, channel = 'integration') {
   try {
     await stat(finalDirectory);
     const validation = await validateSnapshot(finalDirectory);
+    if (channel === 'integration') catalog.markPublishedFrontier(records);
     return { ...validation, id: snapshotId, directory: finalDirectory };
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
@@ -266,6 +253,7 @@ export async function buildSnapshot(catalog, config, channel = 'integration') {
   const manifestSha256 = sha256(manifestBytes);
   catalog.addSnapshot({ id: snapshotId, channel, directory: finalDirectory, recordCount: records.length,
     includesFixture: manifest.includes_fixture, qualified: manifest.qualified, manifestSha256 });
+  if (channel === 'integration') catalog.markPublishedFrontier(records);
   return { id: snapshotId, directory: finalDirectory, recordCount: records.length,
     includesFixture: manifest.includes_fixture, qualified: manifest.qualified, manifestSha256 };
 }

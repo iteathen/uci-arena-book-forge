@@ -2,11 +2,14 @@ import assert from 'node:assert/strict';
 import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import { ExplorerAcquisition, acquisitionQuery, validateExplorerResponse } from '../src/acquisition.mjs';
 import { Catalog } from '../src/catalog.mjs';
 import { canonicalFen, encodePolyglotMove, keyBuffer, polyglotKey, positionFingerprint } from '../src/chess.mjs';
 import { buildSnapshot, validateSnapshot } from '../src/compiler.mjs';
 import { loadConfig } from '../src/config.mjs';
+import { runDaemon } from '../src/daemon.mjs';
 import { discoverInbox, ingestSource, registerInput } from '../src/ingest.mjs';
 import { runMaintenance } from '../src/maintenance.mjs';
 import { NativeResourceHelper } from '../src/native_helper.mjs';
@@ -60,6 +63,242 @@ test('Windows startup task owns one supervised foreground daemon with absolute p
   assert.match(xml, /<ExecutionTimeLimit>PT0S<\/ExecutionTimeLimit>/);
   assert.match(xml, /<RestartOnFailure>/);
   assert.match(xml, /Book &amp; Forge/);
+});
+
+test('catalog schema three migrates acquisition authority columns without losing sources', async (t) => {
+  const config = await workspace(t);
+  const legacy = new DatabaseSync(config.paths.catalog);
+  legacy.exec(`
+    CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+    INSERT INTO metadata(key,value) VALUES('schema_version','3');
+    CREATE TABLE sources (
+      id INTEGER PRIMARY KEY, sha256 TEXT NOT NULL UNIQUE, source_path TEXT NOT NULL,
+      source_type TEXT NOT NULL, fixture INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL CHECK(status IN ('pending','processing','complete','error')),
+      lifecycle TEXT NOT NULL DEFAULT 'active' CHECK(lifecycle IN ('active','quarantined','retired','restored')),
+      games_seen INTEGER NOT NULL DEFAULT 0, games_accepted INTEGER NOT NULL DEFAULT 0,
+      chunks INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    INSERT INTO sources(sha256,source_path,source_type,status,created_at,updated_at)
+      VALUES('${'f'.repeat(64)}','legacy.pgn','lichess_pgn','complete','2026-01-01','2026-01-01');
+  `);
+  legacy.close();
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const source = catalog.source(1);
+  assert.equal(source.overlap_domain, `manual:${'f'.repeat(64)}`);
+  assert.equal(source.contribution_mode, 'additive');
+  assert.equal(catalog.database.prepare("SELECT value FROM metadata WHERE key='schema_version'").get().value, '4');
+});
+
+test('configuration copies defaults and forbids redirecting the credential header', async (t) => {
+  const first = await workspace(t);
+  first.acquisition.resourcePollMs = 10;
+  const second = await loadConfig({ workspace: first.workspace });
+  assert.equal(second.acquisition.resourcePollMs, 1_000);
+  const filename = path.join(first.workspace, 'unsafe.config.json');
+  await writeFile(filename, JSON.stringify({
+    schema: 'flashfork_book_forge_config_v1', acquisition: { endpoint: 'https://example.com/lichess' },
+  }));
+  await assert.rejects(loadConfig({ configFile: filename, workspace: first.workspace }), /acquisition configuration/);
+  t.after(() => rm(first.workspace, { recursive: true, force: true }));
+});
+
+test('Explorer acquisition sips validated mover-relative positions and replaces cumulative observations', async (t) => {
+  const config = await workspace(t);
+  config.acquisition.tokenFile = path.join(config.workspace, 'fixture-token.txt');
+  config.acquisition.dailyRequestBudget = 1;
+  await writeFile(config.acquisition.tokenFile, 'fixture-token\n');
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  let captured;
+  const payload = {
+    white: 670, draws: 220, black: 210,
+    moves: [
+      { uci: 'e2e4', averageRating: 2240, white: 600, draws: 200, black: 200 },
+      { uci: 'd2d4', averageRating: 2310, white: 70, draws: 20, black: 10 },
+    ], topGames: [], recentGames: [], opening: null,
+  };
+  const acquisition = new ExplorerAcquisition(catalog, config, { fetchImpl: async (url, options) => {
+    captured = { url: new URL(url), authorization: options.headers.Authorization };
+    return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
+  } });
+  const governor = { permit: async () => ({ allowed: true, mode: 'courtesy' }) };
+  const report = await acquisition.run(governor, { maxRequests: 2 });
+  assert.equal(report.requests, 1);
+  assert.equal(report.positions, 1);
+  assert.equal(report.moves, 2);
+  assert.equal(report.enqueued, 2);
+  assert.equal(captured.authorization, 'Bearer fixture-token');
+  assert.equal(captured.url.hostname, 'explorer.lichess.org');
+  assert.equal(captured.url.searchParams.get('speeds'), 'classical,rapid');
+  assert.equal(captured.url.searchParams.get('ratings'), '2000,2200,2500');
+  assert.equal(captured.url.searchParams.get('moves'), '50');
+  assert.equal(captured.url.searchParams.get('topGames'), '0');
+  assert.equal(captured.url.searchParams.get('recentGames'), '0');
+  const observations = catalog.aggregateObservations({ includeFixtures: false });
+  assert.equal(observations.length, 2);
+  const e4 = observations.find((row) => row.uciMove === 'e2e4');
+  assert.deepEqual([e4.games, e4.wins, e4.draws, e4.losses], [1000, 600, 200, 200]);
+  const next = catalog.nextFrontier(Number(acquisition.dataset.id));
+  assert.equal(next.ply, 1);
+  assert.equal(next.via_move, 'd2d4');
+  const frontierPositions = catalog.acquisitionStatus().frontierPositions;
+  catalog.enqueueFrontier(Number(acquisition.dataset.id), { ...next, ply: 2, priority: 0 });
+  assert.equal(catalog.acquisitionStatus().frontierPositions, frontierPositions);
+  assert.equal(acquisition.enqueueChildren({
+    fen: canonicalFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'),
+    ply: config.acquisition.maximumPly,
+  }, [{
+    rawMove: encodePolyglotMove('e2e4'), uciMove: 'e2e4', games: 100, wins: 70, draws: 20, losses: 10,
+  }]), 0);
+  assert.equal(catalog.acquisitionStatus().frontierPositions, frontierPositions);
+  assert.equal(JSON.stringify(catalog.status()).includes('fixture-token'), false);
+  const root = observations[0];
+  catalog.replaceRemotePosition(Number(acquisition.dataset.id), root, [{
+    rawMove: encodePolyglotMove('e2e4'), uciMove: 'e2e4', games: 77, wins: 50, draws: 17, losses: 10, averageRating: 2300,
+  }], 'a'.repeat(64));
+  assert.equal(catalog.aggregateObservations({ includeFixtures: false })[0].games, 77);
+  const snapshot = await buildSnapshot(catalog, config, 'integration');
+  const manifest = JSON.parse(await readFile(path.join(snapshot.directory, 'snapshot.manifest.json'), 'utf8'));
+  assert.equal(manifest.source_evidence[0].source_type, 'lichess_opening_explorer');
+  assert.equal(manifest.source_evidence[0].overlap_domain, 'lichess_standard_rated');
+});
+
+test('Explorer source authority prevents overlapping datasets from double counting', async (t) => {
+  const config = await workspace(t);
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const queryA = JSON.stringify({ generation: 'a' });
+  const queryB = JSON.stringify({ generation: 'b' });
+  const first = catalog.ensureAcquisitionDataset({ provider: 'lichess_opening_explorer', overlapDomain: 'lichess_standard_rated',
+    contributionMode: 'authoritative', queryJson: queryA, queryDigest: 'a'.repeat(64) });
+  const fen = canonicalFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
+  const key = polyglotKey(fen);
+  const position = { fen, key, keyBuffer: keyBuffer(key), fingerprint: positionFingerprint(fen) };
+  const record = (games) => ({ rawMove: encodePolyglotMove('e2e4'), uciMove: 'e2e4', games, wins: games, draws: 0, losses: 0, averageRating: 2400 });
+  catalog.enqueueFrontier(Number(first.id), { ...position, ply: 0 });
+  catalog.replaceRemotePosition(Number(first.id), position, [record(100)], '1'.repeat(64));
+  catalog.completeFrontier(Number(first.id), position.fingerprint, { responseDigest: '1'.repeat(64), refreshDays: 7 });
+  const second = catalog.ensureAcquisitionDataset({ provider: 'lichess_opening_explorer', overlapDomain: 'lichess_standard_rated',
+    contributionMode: 'authoritative', queryJson: queryB, queryDigest: 'b'.repeat(64) });
+  catalog.enqueueFrontier(Number(second.id), { ...position, ply: 0 });
+  catalog.replaceRemotePosition(Number(second.id), position, [record(40)], '2'.repeat(64));
+  const audit = catalog.registerSource({ sha256: 'c'.repeat(64), sourcePath: 'audit.pgn.zst', sourceType: 'lichess_pgn',
+    overlapDomain: 'lichess_standard_rated', contributionMode: 'audit_only' });
+  catalog.replaceObservationChunk(Number(audit.id), 0, [{ ...position, ...record(500), month: '2026-06', speed: 'rapid', ratingBucket: 2200 }]);
+  catalog.updateSource(Number(audit.id), 'complete', { gamesSeen: 500, gamesAccepted: 500, chunks: 1 });
+  const aggregate = catalog.aggregateObservations({ includeFixtures: false });
+  assert.equal(aggregate.length, 1);
+  assert.equal(aggregate[0].games, 40);
+  assert.deepEqual(catalog.acquisitionEvidence().map((entry) => entry.contribution_mode).sort(), ['audit_only', 'authoritative']);
+  assert.equal(catalog.acquisitionStatus().positions, 0);
+  assert.equal(catalog.acquisitionStatus().frontierPositions, 1);
+});
+
+test('Explorer rejects malformed results and fails closed when its credential is unavailable', async (t) => {
+  const black = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1';
+  const converted = validateExplorerResponse(black, { white: 10, draws: 5, black: 20,
+    moves: [{ uci: 'c7c5', averageRating: 2200, white: 10, draws: 5, black: 20 }] });
+  assert.deepEqual([converted[0].games, converted[0].wins, converted[0].draws, converted[0].losses], [35, 20, 5, 10]);
+  assert.throws(() => validateExplorerResponse(black, { white: 0, draws: 0, black: 0,
+    moves: [{ uci: 'e2e4', averageRating: 2200, white: 0, draws: 0, black: 0 }] }), /invalid move/);
+
+  const config = await workspace(t);
+  config.acquisition.tokenFile = path.join(config.workspace, 'missing-token.txt');
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  let fetched = false;
+  const acquisition = new ExplorerAcquisition(catalog, config, { fetchImpl: async () => { fetched = true; throw new Error('unexpected'); } });
+  const report = await acquisition.run({ permit: async () => ({ allowed: true, mode: 'courtesy' }) }, { maxRequests: 1 });
+  assert.equal(fetched, false);
+  assert.equal(report.stopped, 'Lichess acquisition credential is unavailable');
+  assert.equal(catalog.acquisitionStatus().authState, 'blocked');
+  assert.equal(catalog.retryAcquisitionAuth(), 1);
+});
+
+test('Book Forge status exposes bounded daemon heartbeat and acquisition telemetry', async (t) => {
+  const config = await workspace(t);
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  catalog.updateDaemonState({ pid: 123, phase: 'acquisition', heartbeat_at: new Date().toISOString(),
+    last_report: { payload: 'x'.repeat(100_000) } });
+  const status = catalog.status();
+  assert.equal(status.schema, 'flashfork_book_forge_status_v2');
+  assert.equal(status.daemon.pid, 123);
+  assert.equal(status.daemon.phase, 'acquisition');
+  assert.equal(status.daemon.stale, false);
+  assert.equal(status.daemon.lastReport.truncated, true);
+  assert.deepEqual(acquisitionQuery(config), {
+    variant: 'standard', speeds: ['classical', 'rapid'], ratings: [2000, 2200, 2500],
+    moves: 50, topGames: 0, recentGames: 0, history: false,
+  });
+});
+
+test('Explorer rate limits and live resource revocation back off without partial observations', async (t) => {
+  const config = await workspace(t);
+  config.acquisition.tokenFile = path.join(config.workspace, 'fixture-token.txt');
+  config.acquisition.resourcePollMs = 10;
+  config.acquisition.requestTimeoutMs = 1_000;
+  config.acquisition.dailyRequestBudget = 2;
+  await writeFile(config.acquisition.tokenFile, 'fixture-token\n');
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  let permits = 0;
+  const governor = { permit: async () => (++permits < 3
+    ? { allowed: true, mode: 'courtesy' }
+    : { allowed: false, mode: 'backoff', reason: 'priority process is running' }) };
+  const acquisition = new ExplorerAcquisition(catalog, config, { fetchImpl: async (_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+  }) });
+  const started = performance.now();
+  const report = await acquisition.run(governor, { maxRequests: 1 });
+  assert.ok(performance.now() - started < 2_000);
+  assert.equal(report.stopped, 'priority process is running');
+  assert.equal(catalog.aggregateObservations({ includeFixtures: false }).length, 0);
+
+  catalog.retryAcquisitionAuth();
+  catalog.database.prepare("UPDATE acquisition_frontier SET state='queued',next_due_at=?").run(new Date().toISOString());
+  const limited = new ExplorerAcquisition(catalog, config, { fetchImpl: async () => new Response('', {
+    status: 429, headers: { 'retry-after': '1' },
+  }) });
+  const limitedReport = await limited.run({ permit: async () => ({ allowed: true, mode: 'courtesy' }) }, { maxRequests: 1 });
+  assert.equal(limitedReport.stopped, 'Lichess acquisition rate limit');
+  assert.equal(catalog.acquisitionStatus().lastHttpStatus, 429);
+});
+
+test('one-shot daemon persists a heartbeat and a single bounded cycle report', async (t) => {
+  const config = await workspace(t);
+  config.acquisition.enabled = false;
+  config.channels.integration = false;
+  config.channels.qualified = false;
+  config.nativeHelperAvailable = false;
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const report = await runDaemon(catalog, config, { once: true });
+  const state = catalog.daemonState();
+  assert.equal(report.acquisition.enabled, false);
+  assert.equal(state.phase, 'stopped');
+  assert.equal(state.stale, false);
+  assert.equal(state.lastReport.acquisition.enabled, false);
+  const heartbeat = JSON.parse(await readFile(config.daemonHeartbeatFile, 'utf8'));
+  assert.equal(heartbeat.pid, process.pid);
+});
+
+test('acquisition-only execution stays isolated from ingestion, analysis, and publication', async (t) => {
+  const config = await workspace(t);
+  config.acquisition.enabled = false;
+  config.nativeHelperAvailable = false;
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const report = await runDaemon(catalog, config, { once: true, acquisitionOnly: true });
+  assert.equal(report.acquisition.enabled, false);
+  assert.deepEqual(report.discovered, []);
+  assert.deepEqual(report.ingested, []);
+  assert.equal(report.integration, null);
+  assert.equal(report.analysis, null);
+  assert.equal(report.maintenance, null);
 });
 
 test('fixture ingestion is idempotent and creates deterministic integration snapshots only', async (t) => {

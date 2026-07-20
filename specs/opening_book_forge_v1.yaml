@@ -46,6 +46,8 @@ storage:
     - "Chunk aggregation is memory-bounded, deterministic, and idempotently replaceable after interruption."
     - "Sources remain separable so exclusion never requires raw-PGN replay."
     - "Expensive analysis is reusable only under an identical engine, NNUE, and node-tier fingerprint."
+    - "Exactly one authoritative dataset contributes observations for an overlap domain; audit-only datasets never enter published counts."
+    - "Remote position refresh replaces the complete validated response atomically and never adds cumulative totals to their prior values."
 
 inputs:
   supported: [.pgn, .pgn.gz, .pgn.zst, integration_fixture]
@@ -58,6 +60,56 @@ inputs:
     maximum_ply: 30
   perspective: side_to_move_before_candidate_move
   fixture_rule: "Fixture observations are permanently ineligible for the qualified channel."
+
+acquisition:
+  default_enabled: true
+  owner: book_forge
+  engine_runtime_network_access: forbidden
+  primary_provider:
+    id: lichess_opening_explorer
+    endpoint: 'https://explorer.lichess.org/lichess'
+    overlap_domain: lichess_standard_rated
+    contribution_mode: authoritative
+    filters:
+      variant: standard
+      speeds: [rapid, classical]
+      rating_groups: [2000, 2200, 2500]
+      moves: 50
+      top_games: 0
+      recent_games: 0
+      maximum_ply: 30
+    credential:
+      source: configurable_token_file
+      default_path: secrets/lichess_bot_token.txt
+      rules:
+        - "Read the token only inside the provider adapter and send it only as an authorization header."
+        - "Never persist, log, print, hash, copy, or place the token or its contents on a command line."
+        - "Authentication failure opens a visible fail-closed circuit without terminating the daemon."
+  frontier:
+    seed: standard_start_position
+    identity: canonical_position_fingerprint
+    minimum_games: 32
+    crawl_lcb_gap: 0.10
+    ordering: [unqueried_shallowest_ply, highest_rarity_adjusted_quality, overdue_published_position, overdue_frontier_position, fingerprint]
+    refresh_days: {published: 7, frontier: 30}
+    transposition_deduplication: required
+  request_policy:
+    concurrency: 1
+    minimum_interval_ms: 5000
+    daily_request_budget: 2000
+    timeout_ms: 10000
+    rate_limit_pause_seconds_minimum: 60
+    resource_revocation_abort_seconds: 2
+  publication_bootstrap:
+    successful_positions: 25
+    maximum_wait_minutes: 5
+    integration_debounce_minutes: 15
+  pgn_audit_followup:
+    default_enabled: false
+    transport: streamed_http_zstd
+    contribution_mode: audit_only
+    complete_archive_retention: forbidden
+    rule: "A Lichess monthly PGN audit may compare Explorer statistics but never contributes observations to a snapshot."
 
 analysis:
   provider: persistent_stockfish_uci_workers
@@ -130,9 +182,19 @@ resource_governor:
   rules:
     - "Back off quickly and ramp slowly with hysteresis."
     - "Configured priority processes, battery use, thermal throttling, memory pressure, and disk pressure override idle harvesting."
+    - "Acquisition requests are abortable and stop within two seconds after resource permission is revoked."
+
+daemon_observability:
+  heartbeat_seconds: 15
+  stale_seconds: 300
+  report_retention: last_cycle_only
+  phases: [acquisition, ingestion, analysis, publication, maintenance, sleep]
+  rules:
+    - "Status reports persisted phase, heartbeat, cycle timestamps, resource mode, bounded last report, and a redacted last error."
+    - "The Windows native supervisor terminates a stale daemon so Task Scheduler can apply its configured failure restart."
 
 cli:
-  commands: [init, source_add, source_quarantine, source_retire, source_restore, daemon, pause, resume, status, snapshot_build, qualification_record, maintain, validate, publish, startup_install, startup_status, startup_uninstall]
+  commands: [init, source_add, source_quarantine, source_retire, source_restore, acquisition_run, acquisition_status, acquisition_retry_auth, daemon, pause, resume, status, snapshot_build, qualification_record, maintain, validate, publish, startup_install, startup_status, startup_uninstall]
   background_rule: "daemon --detach starts the same single-instance worker in a hidden detached Node process."
   machine_output: json
   single_instance: true
@@ -167,3 +229,9 @@ validation:
     - trimming_hysteresis_and_losing_position_relative_score
     - courtesy_foreground_slowdown_below_2_percent
     - backoff_within_2_seconds
+    - explorer_query_filter_auth_redaction_and_response_validation
+    - explorer_mover_perspective_atomic_refresh_and_idempotence
+    - deterministic_frontier_rarity_priority_transposition_and_ply_cap
+    - overlap_domain_authority_prevents_explorer_pgn_double_counting
+    - rate_limit_auth_circuit_daily_budget_and_resource_abort
+    - bounded_daemon_report_and_advancing_heartbeat

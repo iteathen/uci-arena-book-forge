@@ -29,6 +29,29 @@ const defaults = {
     hashMbPerWorker: 128,
     maximumWorkers: 8,
   },
+  acquisition: {
+    enabled: true,
+    provider: 'lichess_opening_explorer',
+    endpoint: 'https://explorer.lichess.org/lichess',
+    tokenFile: path.join(repositoryRoot, 'secrets', 'lichess_bot_token.txt'),
+    variant: 'standard',
+    speeds: ['rapid', 'classical'],
+    ratings: [2000, 2200, 2500],
+    movesPerPosition: 50,
+    maximumPly: 30,
+    minimumGames: 32,
+    crawlLcbGap: 0.10,
+    requestIntervalMs: 5_000,
+    dailyRequestBudget: 2_000,
+    requestTimeoutMs: 10_000,
+    resourcePollMs: 1_000,
+    publishedRefreshDays: 7,
+    frontierRefreshDays: 30,
+    firstPublishPositions: 25,
+    firstPublishMaxMinutes: 5,
+    integrationDebounceMinutes: 15,
+  },
+  pgnAudit: { enabled: false },
   resources: {
     minimumFreeWorkspaceGb: 75,
     pauseAvailableMemoryGb: 6,
@@ -80,12 +103,35 @@ export async function loadConfig({ configFile, workspace } = {}) {
     }
     configDirectory = path.dirname(absolute);
   }
-  const config = merge(defaults, loaded);
+  const config = merge(structuredClone(defaults), loaded);
   config.workspace = path.resolve(workspace ?? process.env.BOOK_FORGE_ROOT ?? config.workspace);
   config.configFile = configFile ? path.resolve(configFile) : null;
   config.policyFile = resolveConfiguredPath(config.policyFile, configDirectory);
   config.stockfish = resolveConfiguredPath(config.stockfish, configDirectory);
   config.nativeHelper = resolveConfiguredPath(config.nativeHelper, configDirectory);
+  config.acquisition.tokenFile = resolveConfiguredPath(config.acquisition.tokenFile, configDirectory);
+  let acquisitionEndpoint;
+  try { acquisitionEndpoint = new URL(config.acquisition.endpoint); } catch { acquisitionEndpoint = null; }
+  if (config.acquisition.provider !== 'lichess_opening_explorer' || config.acquisition.variant !== 'standard' ||
+      acquisitionEndpoint?.origin !== 'https://explorer.lichess.org' || acquisitionEndpoint.username || acquisitionEndpoint.password ||
+      acquisitionEndpoint.pathname !== '/lichess' || acquisitionEndpoint.search || acquisitionEndpoint.hash ||
+      !Array.isArray(config.acquisition.speeds) || !config.acquisition.speeds.length ||
+      config.acquisition.speeds.some((speed) => !['rapid', 'classical'].includes(speed)) ||
+      !Array.isArray(config.acquisition.ratings) || !config.acquisition.ratings.length ||
+      config.acquisition.ratings.some((rating) => ![2000, 2200, 2500].includes(rating)) ||
+      !Number.isInteger(config.acquisition.movesPerPosition) || config.acquisition.movesPerPosition < 1 || config.acquisition.movesPerPosition > 50 ||
+      !Number.isInteger(config.acquisition.maximumPly) || config.acquisition.maximumPly < 1 ||
+      !Number.isInteger(config.acquisition.minimumGames) || config.acquisition.minimumGames < 1 ||
+      !Number.isInteger(config.acquisition.dailyRequestBudget) || config.acquisition.dailyRequestBudget < 1 ||
+      config.acquisition.requestIntervalMs < 5_000 || config.acquisition.requestTimeoutMs < 1_000 ||
+      config.acquisition.resourcePollMs < 100 || config.acquisition.resourcePollMs > 2_000 ||
+      !Number.isInteger(config.acquisition.publishedRefreshDays) || config.acquisition.publishedRefreshDays < 1 ||
+      !Number.isInteger(config.acquisition.frontierRefreshDays) || config.acquisition.frontierRefreshDays < 1 ||
+      !Number.isInteger(config.acquisition.firstPublishPositions) || config.acquisition.firstPublishPositions < 1 ||
+      config.acquisition.firstPublishMaxMinutes <= 0 || config.acquisition.integrationDebounceMinutes < 0 ||
+      config.acquisition.crawlLcbGap <= 0) {
+    throw new Error('Book Forge acquisition configuration violates its numeric or provider contract');
+  }
   config.paths = {
     catalog: path.join(config.workspace, 'catalog.sqlite'),
     shards: path.join(config.workspace, 'shards'),
@@ -95,6 +141,7 @@ export async function loadConfig({ configFile, workspace } = {}) {
     published: path.join(config.workspace, 'published'),
     locks: path.join(config.workspace, 'locks'),
   };
+  config.daemonHeartbeatFile = path.join(config.paths.locks, 'daemon.heartbeat');
   config.stockfishAvailable = Boolean(config.stockfish && existsSync(config.stockfish));
   config.nativeHelperAvailable = process.platform === 'win32' && Boolean(config.nativeHelper && existsSync(config.nativeHelper));
   return config;

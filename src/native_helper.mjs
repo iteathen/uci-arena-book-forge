@@ -11,7 +11,9 @@ export class NativeResourceHelper {
 
   start() {
     if (!this.config.nativeHelperAvailable || this.supervisor) return false;
-    this.supervisor = spawn(this.config.nativeHelper, ['--supervise', String(process.pid)], {
+    this.supervisor = spawn(this.config.nativeHelper, [
+      '--supervise', String(process.pid), '--heartbeat', this.config.daemonHeartbeatFile, '--stale-seconds', '300',
+    ], {
       stdio: 'ignore', windowsHide: true,
     });
     this.supervisor.once('exit', () => { this.supervisor = null; });

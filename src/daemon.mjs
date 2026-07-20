@@ -1,5 +1,6 @@
-import { open, readFile, rm, stat } from 'node:fs/promises';
+import { open, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { ExplorerAcquisition } from './acquisition.mjs';
 import { buildSnapshot } from './compiler.mjs';
 import { discoverInbox, ingestSource } from './ingest.mjs';
 import { runMaintenance } from './maintenance.mjs';
@@ -40,14 +41,37 @@ async function acquireLock(config) {
   };
 }
 
-export async function runCycle(catalog, config, governor = new ResourceGovernor(config, catalog)) {
+function integrationBuildDue(catalog, config, report) {
+  if (!catalog.channel('integration')) return true;
+  if (report.acquisition?.positions > 0 || report.ingested.length || catalog.pendingSources().length) {
+    const last = Date.parse(catalog.metadata('last_integration_build_at') ?? '');
+    return !Number.isFinite(last) || Date.now() - last >= config.acquisition.integrationDebounceMinutes * 60_000;
+  }
+  return false;
+}
+
+function acquisitionBootstrapReady(catalog, config) {
+  const status = catalog.acquisitionStatus();
+  if (status.positions >= config.acquisition.firstPublishPositions) return true;
+  const dataset = catalog.acquisitionEvidence().find((entry) => entry.contribution_mode === 'authoritative');
+  return dataset && Date.now() - Date.parse(dataset.created_at) >= config.acquisition.firstPublishMaxMinutes * 60_000;
+}
+
+export async function runCycle(catalog, config, governor = new ResourceGovernor(config, catalog),
+    acquisition = new ExplorerAcquisition(catalog, config), setPhase = () => {}, acquisitionMaxRequests = undefined,
+    acquisitionOnly = false) {
   const initialPermit = await governor.permit();
-  const report = { discovered: [], ingested: [], integration: null, analysis: null, qualified: null, maintenance: null, resource: initialPermit };
+  const report = { acquisition: null, discovered: [], ingested: [], integration: null, analysis: null, qualified: null, maintenance: null, resource: initialPermit };
   if (!initialPermit.allowed) {
+    report.acquisition = { enabled: config.acquisition.enabled, requests: 0, positions: 0, moves: 0, stopped: initialPermit.reason };
     report.analysis = { positions: 0, moves: 0, skipped: true, reason: initialPermit.reason };
     report.maintenance = { skipped: true, reason: initialPermit.reason };
     return report;
   }
+  setPhase('acquisition', initialPermit.mode);
+  report.acquisition = await acquisition.run(governor, { maxRequests: acquisitionMaxRequests });
+  if (acquisitionOnly) return report;
+  setPhase('ingestion', report.resource.mode);
   report.discovered = await discoverInbox(catalog, config, governor);
   for (const source of catalog.pendingSources()) {
     const permit = await governor.permit();
@@ -61,16 +85,22 @@ export async function runCycle(catalog, config, governor = new ResourceGovernor(
       report.ingested.push({ sourceId: Number(source.id), error: error.message });
     }
   }
-  if (config.channels.integration && catalog.completedSources().length) {
+  const localReady = catalog.completedSources().some((source) => source.contribution_mode === 'additive');
+  const remoteReady = config.acquisition.enabled && catalog.hasPublishableObservations() && acquisitionBootstrapReady(catalog, config);
+  if (config.channels.integration && (localReady || remoteReady) && integrationBuildDue(catalog, config, report)) {
+    setPhase('publication', report.resource.mode);
     try {
       const snapshot = await buildSnapshot(catalog, config, 'integration');
       report.integration = await publishSnapshot(catalog, config, snapshot.directory, 'integration');
+      catalog.setMetadata('last_integration_build_at', new Date().toISOString());
     } catch (error) {
       report.integration = { blocked: true, reason: error.message };
     }
   }
+  setPhase('analysis', report.resource.mode);
   report.analysis = await analyzeObservations(catalog, config, governor);
-  if (config.channels.qualified && catalog.completedSources().some((source) => !source.fixture)) {
+  if (config.channels.qualified && catalog.hasPublishableObservations({ includeFixtures: false })) {
+    setPhase('publication', report.resource.mode);
     try {
       const snapshot = await buildSnapshot(catalog, config, 'qualified');
       report.qualified = await publishSnapshot(catalog, config, snapshot.directory, 'qualified');
@@ -78,24 +108,43 @@ export async function runCycle(catalog, config, governor = new ResourceGovernor(
       report.qualified = { blocked: true, reason: error.message };
     }
   }
+  setPhase('maintenance', report.resource.mode);
   const maintenancePermit = await governor.permit();
   if (maintenancePermit.allowed) report.maintenance = await runMaintenance(catalog, config);
   else report.maintenance = { skipped: true, reason: maintenancePermit.reason };
   return report;
 }
 
-export async function runDaemon(catalog, config, { once = false } = {}) {
+export async function runDaemon(catalog, config, { once = false, acquisitionMaxRequests = undefined, acquisitionOnly = false } = {}) {
+  if (acquisitionOnly && !once) throw new Error('Acquisition-only execution must be one shot');
   const releaseLock = await acquireLock(config);
+  const startedAt = new Date().toISOString();
+  const heartbeat = async () => {
+    const now = new Date().toISOString();
+    catalog.updateDaemonState({ pid: process.pid, started_at: startedAt, heartbeat_at: now });
+    await writeFile(config.daemonHeartbeatFile, `${JSON.stringify({ pid: process.pid, heartbeatAt: now })}\n`, 'utf8');
+  };
+  await heartbeat();
+  const heartbeatTimer = setInterval(() => { heartbeat().catch(() => {}); }, 15_000);
+  const setPhase = (phase, resourceMode = '') => catalog.updateDaemonState({ phase, resource_mode: resourceMode, heartbeat_at: new Date().toISOString() });
   const governor = new ResourceGovernor(config, catalog);
+  const acquisition = new ExplorerAcquisition(catalog, config);
   try {
-    const reports = [];
+    let lastReport = null;
     do {
-      reports.push(await runCycle(catalog, config, governor));
-      if (!once) await delay(60_000);
+      catalog.updateDaemonState({ cycle_started_at: new Date().toISOString(), last_error: '' });
+      lastReport = await runCycle(catalog, config, governor, acquisition, setPhase, acquisitionMaxRequests, acquisitionOnly);
+      catalog.updateDaemonState({ cycle_completed_at: new Date().toISOString(), last_report: lastReport });
+      if (!once) { setPhase('sleep', governor.last.mode); await delay(60_000); }
     } while (!once);
-    return reports.at(-1);
+    return lastReport;
+  } catch (error) {
+    catalog.updateDaemonState({ phase: 'failed', heartbeat_at: new Date().toISOString(), last_error: error.message });
+    throw error;
   } finally {
+    clearInterval(heartbeatTimer);
     governor.close();
+    if (once) catalog.updateDaemonState({ phase: 'stopped', heartbeat_at: new Date().toISOString() });
     await releaseLock();
   }
 }
