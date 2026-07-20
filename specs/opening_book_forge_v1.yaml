@@ -138,6 +138,8 @@ publication:
     integration:
       automatic: true
       fixture_allowed: true
+      runtime_consumable: true
+      default_windows_consumer: uci_knowledge_source_opening_book
       gates: [schema, digest, ordering, legality, deterministic_compile]
     qualified:
       automatic: true
@@ -151,6 +153,11 @@ publication:
   atomicity: "Validate an immutable version directory, then atomically replace the channel directory."
   rollback: "Preserve the prior channel version and restore it on failed post-publication validation."
   running_engine_rule: "A running engine retains its loaded snapshot; activation occurs on engine start or explicit reload."
+  integration_rule: >
+    The integration channel is the default operational Windows input for the
+    UCI opening-book adapter. It is intentionally useful before strength
+    qualification completes; qualified remains the authority for strength and
+    release-promotion claims.
 
 bounded_growth:
   maximum_published_moves_per_position: 6

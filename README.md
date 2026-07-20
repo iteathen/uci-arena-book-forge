@@ -86,9 +86,11 @@ Without that helper, Book Forge remains functional and conservatively uses the
 portable low-priority, CPU, memory, disk, and priority-process controls.
 
 The fixture is permanently marked `integration_only`; it can never enter the
-qualified channel. Configure UCI `BookFile`, `BookStatsFile`, and
-`BookPolicyFile` to the corresponding files under
-`E:\book-forge\published\integration`.
+qualified channel. On Windows, UCI Arena consumes the published integration
+channel automatically on its next engine start. It resolves the workspace from
+`BOOK_FORGE_ROOT`, or uses `E:\book-forge` when that variable is unset. The UCI
+`BookFile`, `BookStatsFile`, and `BookPolicyFile` options remain explicit
+operator overrides.
 
 For real data, use `source add <file.pgn|file.pgn.gz|file.pgn.zst>`. The daemon
 idempotently ingests pending sources and publishes statistical integration
