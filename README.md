@@ -68,7 +68,10 @@ class. Additional Stockfish workers ramp only after sustained idle samples. A
 record export caps are enabled by default. Monthly maintenance consolidates
 cohorts older than 24 months without losing source identity, drops obsolete
 retired PV text, and retains four snapshot generations per channel. Publishing
-identical content is a no-op.
+identical content is a no-op. A transient Stockfish startup, interrogation, or
+command timeout is contained to that analysis stage: workers are closed, the
+bounded cycle report records the error, and maintenance plus later cycles
+continue without treating partial analysis as qualified evidence.
 
 `status` includes the current acquisition frontier and request budget plus the
 daemon phase, heartbeat, cycle timestamps, and bounded last-cycle report. The

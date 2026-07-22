@@ -63,7 +63,7 @@ function acquisitionBootstrapReady(catalog, config) {
 
 export async function runCycle(catalog, config, governor = new ResourceGovernor(config, catalog),
     acquisition = new ExplorerAcquisition(catalog, config), setPhase = () => {}, acquisitionMaxRequests = undefined,
-    acquisitionOnly = false) {
+    acquisitionOnly = false, analyzer = analyzeObservations) {
   const acquisitionPermit = await governor.permit(RESOURCE_WORK_CLASSES.ACQUISITION);
   const report = { acquisition: null, discovered: [], ingested: [], integration: null, analysis: null, qualified: null, maintenance: null, resource: acquisitionPermit };
   if (!acquisitionPermit.allowed) {
@@ -119,8 +119,17 @@ export async function runCycle(catalog, config, governor = new ResourceGovernor(
   report.resource = analysisPermit;
   setPhase('analysis', analysisPermit.mode);
   if (analysisPermit.allowed) {
-    report.analysis = await analyzeObservations(catalog, config,
-      scopedGovernor(governor, RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS));
+    try {
+      report.analysis = await analyzer(catalog, config,
+        scopedGovernor(governor, RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS));
+    } catch (error) {
+      report.analysis = {
+        positions: 0,
+        moves: 0,
+        skipped: true,
+        recoverableError: String(error?.message ?? error).slice(0, 512),
+      };
+    }
   } else {
     report.analysis = { positions: 0, moves: 0, skipped: true, reason: analysisPermit.reason };
   }

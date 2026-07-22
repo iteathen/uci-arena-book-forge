@@ -126,6 +126,10 @@ analysis:
     - "Quarantine after two current-engine results above 45 cp."
     - "Retire after two results above 70 cp, a decisive WDL loss, or verified forced mate."
     - "Never prune from absolute position evaluation alone."
+  failure_recovery:
+    - "A Stockfish startup, interrogation, command, or timeout failure is recoverable at the daemon cycle boundary."
+    - "The failed analysis stage reports zero completed positions and moves plus a bounded redacted error, then the daemon continues eligible publication, maintenance, sleep, and the next cycle."
+    - "Worker cleanup remains mandatory before the cycle continues; a failed stage never substitutes partial or synthetic evidence for a qualified-publication gate."
 
 publication:
   snapshot_files:
@@ -198,6 +202,7 @@ daemon_observability:
   phases: [acquisition, ingestion, analysis, publication, maintenance, sleep]
   rules:
     - "Status reports persisted phase, heartbeat, cycle timestamps, resource mode, bounded last report, and a redacted last error."
+    - "A recoverable Stockfish-stage error remains visible in the bounded cycle report without changing the daemon phase to failed."
     - "The Windows native supervisor terminates a stale daemon so Task Scheduler can apply its configured failure restart."
 
 cli:

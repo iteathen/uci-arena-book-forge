@@ -330,6 +330,37 @@ test('one-shot daemon persists a heartbeat and a single bounded cycle report', a
   assert.equal(heartbeat.pid, process.pid);
 });
 
+test('a transient Stockfish failure is isolated to analysis and the cycle completes maintenance', async (t) => {
+  const config = await workspace(t);
+  config.acquisition.enabled = false;
+  config.channels.integration = false;
+  config.channels.qualified = false;
+  config.nativeHelperAvailable = false;
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const governor = mockedResourceGovernor(config, catalog);
+  t.after(() => governor.close());
+  const phases = [];
+  const acquisition = new ExplorerAcquisition(catalog, config);
+  const report = await runCycle(
+    catalog,
+    config,
+    governor,
+    acquisition,
+    (phase) => phases.push(phase),
+    undefined,
+    false,
+    async () => { throw new Error('Timed out waiting for Stockfish after 30000 ms'); },
+  );
+
+  assert.equal(report.analysis.positions, 0);
+  assert.equal(report.analysis.moves, 0);
+  assert.equal(report.analysis.skipped, true);
+  assert.match(report.analysis.recoverableError, /Timed out waiting for Stockfish/);
+  assert.equal(report.maintenance.skipped, false);
+  assert.ok(phases.includes('maintenance'));
+});
+
 test('acquisition-only execution stays isolated from ingestion, analysis, and publication', async (t) => {
   const config = await workspace(t);
   config.acquisition.enabled = false;
