@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
+import { NativeResourceHelper } from './native_helper.mjs';
 
 const defaultRevocationPollMs = 250;
 
@@ -14,7 +15,7 @@ function revocationError(signal) {
   return error;
 }
 
-function monitorResourcePermit(governor, controller, onRevoked, intervalMs) {
+function monitorResourcePermit(governor, controller, onRevoked, intervalMs, activeProfile) {
   let sampling = false;
   let stopped = false;
   const sample = async () => {
@@ -22,7 +23,11 @@ function monitorResourcePermit(governor, controller, onRevoked, intervalMs) {
     sampling = true;
     try {
       const permit = await governor.permit();
-      if (!stopped && !permit.allowed) {
+      const allocationReduced = permit.allowed && Number(permit.workerLimit) < activeProfile.workerCount;
+      const needsReprofile = permit.allowed && permit.mode !== activeProfile.mode;
+      if (!stopped && (!permit.allowed || allocationReduced || needsReprofile)) {
+        if (allocationReduced) permit.reason ||= `worker limit reduced from ${activeProfile.workerCount} to ${permit.workerLimit}`;
+        if (needsReprofile) permit.reason ||= `resource mode changed from ${activeProfile.mode} to ${permit.mode}`;
         onRevoked(permit);
         controller.abort(permit.reason || 'resource permission revoked');
       }
@@ -39,6 +44,24 @@ function monitorResourcePermit(governor, controller, onRevoked, intervalMs) {
   const timer = setInterval(() => { sample().catch(() => {}); }, intervalMs);
   timer.unref?.();
   return () => { stopped = true; clearInterval(timer); };
+}
+
+function interruptibleDelay(milliseconds, signal) {
+  if (milliseconds <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(finish, milliseconds);
+    function finish() {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }
+    function abort() {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      reject(revocationError(signal));
+    }
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, { once: true });
+  });
 }
 
 function hashFile(filename) {
@@ -58,9 +81,12 @@ export class StockfishWorker {
     this.identityLines = [];
     this.optionNames = new Set();
     this.fingerprint = null;
+    this.resourceMode = null;
+    this.resourceProfile = null;
+    this.threads = null;
   }
 
-  async start() {
+  async start({ resourceMode = 'courtesy' } = {}) {
     if (this.child) return;
     if (!this.config.stockfishAvailable) throw new Error(`Stockfish executable not found: ${this.config.stockfish}`);
     this.child = spawn(this.config.stockfish, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -68,6 +94,13 @@ export class StockfishWorker {
     this.child.stderr.on('data', () => {});
     readline.createInterface({ input: this.child.stdout, crlfDelay: Infinity }).on('line', (line) => this.acceptLine(line));
     try { os.setPriority(this.child.pid, os.constants.priority.PRIORITY_LOW); } catch {}
+    const native = new NativeResourceHelper(this.config);
+    this.resourceMode = resourceMode;
+    this.threads = resourceMode === 'background_sip' ? 1 : this.config.analysis.threadsPerWorker;
+    this.resourceProfile = await native.applyProcessProfile(this.child.pid, {
+      efficiencyCoreLimit: resourceMode === 'background_sip'
+        ? this.config.analysis.backgroundSipEfficiencyCores : 0,
+    });
     this.send('uci');
     const uciLines = await this.collectUntil((line) => line === 'uciok', 15_000);
     for (const line of uciLines) {
@@ -78,7 +111,7 @@ export class StockfishWorker {
     for (const required of ['Threads', 'Hash']) {
       if (!this.optionNames.has(required)) throw new Error(`Stockfish is missing required UCI option ${required}`);
     }
-    this.send(`setoption name Threads value ${this.config.analysis.threadsPerWorker}`);
+    this.send(`setoption name Threads value ${this.threads}`);
     this.send(`setoption name Hash value ${this.config.analysis.hashMbPerWorker}`);
     if (this.optionNames.has('UCI_ShowWDL')) this.send('setoption name UCI_ShowWDL value true');
     await this.ready();
@@ -95,7 +128,7 @@ export class StockfishWorker {
       if (evalPath) evalDigests.push({ name: path.basename(evalPath), sha256: await hashFile(evalPath) });
     }
     this.fingerprint = createHash('sha256').update(JSON.stringify({
-      executableDigest, identity: this.identityLines.sort(), threads: this.config.analysis.threadsPerWorker,
+      executableDigest, identity: this.identityLines.sort(), threads: this.threads,
       hashMb: this.config.analysis.hashMbPerWorker, evalDigests,
     })).digest('hex');
   }
@@ -286,22 +319,48 @@ export async function analyzeObservations(catalog, config, governor, {
     grouped.get(identity).push(record);
   }
   const groups = [...grouped.values()];
-  const workers = [workerFactory(config)];
+  const workers = [];
   let positions = 0;
   let moves = 0;
   try {
-    await workers[0].start();
+    let permit = await governor.permit();
+    if (!permit.allowed) {
+      return { positions: 0, moves: 0, skipped: true, reason: permit.reason || 'resource permission denied' };
+    }
+    const firstWorker = workerFactory(config);
+    workers.push(firstWorker);
+    await firstWorker.start({ resourceMode: permit.mode });
     catalog.setMetadata('current_engine_fingerprint', workers[0].fingerprint);
     for (let index = 0; index < groups.length;) {
-      const permit = await governor.permit();
+      permit = await governor.permit();
       if (!permit.allowed) break;
-      const desiredWorkers = Math.max(1, Math.min(config.analysis.maximumWorkers, permit.workerLimit));
+      if (permit.workerLimit < workers.length || permit.mode !== workers[0].resourceMode) {
+        return {
+          positions, moves, skipped: false, interrupted: true,
+          reason: permit.workerLimit < workers.length
+            ? `worker limit reduced from ${workers.length} to ${permit.workerLimit}`
+            : `resource mode changed from ${workers[0].resourceMode} to ${permit.mode}`,
+          workersUsed: workers.length, engineFingerprint: workers[0].fingerprint,
+          resourceMode: permit.mode, processProfiles: workers.map((worker) => worker.resourceProfile),
+        };
+      }
+      const sipCpuSetsProven = permit.mode !== 'background_sip' || (
+        workers[0].resourceProfile?.cpu_set_applied === true &&
+        workers[0].resourceProfile?.idle_priority === true &&
+        workers[0].resourceProfile?.eco_qos === true);
+      const desiredWorkers = Math.max(1, Math.min(config.analysis.maximumWorkers,
+        sipCpuSetsProven ? permit.workerLimit : 1));
       while (workers.length < desiredWorkers) {
         const worker = workerFactory(config);
-        await worker.start();
+        await worker.start({ resourceMode: permit.mode });
         if (worker.fingerprint !== workers[0].fingerprint) {
           await worker.close();
           throw new Error('Stockfish worker fingerprints do not match');
+        }
+        if (permit.mode === 'background_sip' && (worker.resourceProfile?.cpu_set_applied !== true ||
+            worker.resourceProfile?.idle_priority !== true || worker.resourceProfile?.eco_qos !== true)) {
+          await worker.close();
+          break;
         }
         workers.push(worker);
       }
@@ -309,12 +368,20 @@ export async function analyzeObservations(catalog, config, governor, {
       const controller = new AbortController();
       let revokedPermit = null;
       const stopMonitoring = monitorResourcePermit(governor, controller,
-        (revoked) => { revokedPermit = revoked; }, revocationPollMs);
+        (revoked) => { revokedPermit = revoked; }, revocationPollMs,
+        { mode: permit.mode, workerCount: workers.length });
       const tasks = batch.map((records, workerIndex) => analyzeGroup(
         catalog, config, workers[workerIndex], records, controller.signal));
       let results;
+      const workStartedAt = performance.now();
       try {
         results = await Promise.all(tasks);
+        if (permit.mode === 'background_sip' && permit.dutyCyclePercent < 100) {
+          const workMilliseconds = performance.now() - workStartedAt;
+          const restMilliseconds = Math.ceil(workMilliseconds *
+            (100 - permit.dutyCyclePercent) / permit.dutyCyclePercent);
+          await interruptibleDelay(restMilliseconds, controller.signal);
+        }
       } catch (error) {
         if (!controller.signal.aborted) throw error;
         const settled = await Promise.allSettled(tasks);
@@ -325,6 +392,7 @@ export async function analyzeObservations(catalog, config, governor, {
           positions, moves, skipped: false, interrupted: true,
           reason: revokedPermit?.reason || String(controller.signal.reason || 'resource permission revoked'),
           workersUsed: workers.length, engineFingerprint: workers[0].fingerprint,
+          resourceMode: permit.mode, processProfiles: workers.map((worker) => worker.resourceProfile),
         };
       } finally {
         stopMonitoring();
@@ -336,5 +404,10 @@ export async function analyzeObservations(catalog, config, governor, {
   } finally {
     await Promise.all(workers.map((worker) => worker.close()));
   }
-  return { positions, moves, skipped: false, workersUsed: workers.length, engineFingerprint: workers[0].fingerprint };
+  return {
+    positions, moves, skipped: false, workersUsed: workers.length,
+    engineFingerprint: workers[0]?.fingerprint ?? null,
+    resourceMode: workers[0]?.resourceMode ?? null,
+    processProfiles: workers.map((worker) => worker.resourceProfile),
+  };
 }

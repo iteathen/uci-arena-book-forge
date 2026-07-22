@@ -23,7 +23,10 @@
     "confirmationNodes": 2000000,
     "threadsPerWorker": 1,
     "hashMbPerWorker": 128,
-    "maximumWorkers": 8
+    "maximumWorkers": 8,
+    "backgroundSipWorkers": 2,
+    "backgroundSipEfficiencyCores": 2,
+    "backgroundSipDutyCyclePercent": 50
   },
   "acquisition": {
     "enabled": true,
@@ -61,5 +64,10 @@
     "intervalDays": 30,
     "detailedCohortRetentionMonths": 24,
     "snapshotVersionsPerChannel": 4
+  },
+  "daemon": {
+    "cycleIntervalMs": 60000,
+    "failureBackoffInitialMs": 5000,
+    "failureBackoffMaximumMs": 300000
   }
 }
