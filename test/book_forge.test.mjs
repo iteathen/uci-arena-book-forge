@@ -17,7 +17,7 @@ import { runMaintenance } from '../src/maintenance.mjs';
 import { NativeResourceHelper } from '../src/native_helper.mjs';
 import { publishSnapshot } from '../src/publisher.mjs';
 import { RESOURCE_WORK_CLASSES, ResourceGovernor } from '../src/resource_governor.mjs';
-import { StockfishWorker } from '../src/stockfish.mjs';
+import { analyzeObservations, StockfishWorker } from '../src/stockfish.mjs';
 import { buildTaskXml, installWindowsStartup, quoteWindowsArgument, startupAction, startupTaskName } from '../src/windows_startup.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -535,7 +535,7 @@ test('resource governor keeps lightweight work in courtesy mode while the engine
   config.resources.priorityProcessNames = ['msbuild.exe', 'cl.exe'];
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
-  const governor = mockedResourceGovernor(config, catalog, { runningProcesses: ['flashfork_uci.exe'] });
+  const governor = mockedResourceGovernor(config, catalog, { runningProcesses: ['uci_arena.exe'] });
   t.after(() => governor.close());
 
   await assert.rejects(governor.permit(), /Unknown Book Forge resource work class/);
@@ -554,8 +554,42 @@ test('resource governor keeps lightweight work in courtesy mode while the engine
     assert.equal(permit.mode, 'backoff');
     assert.equal(permit.engineProcessRunning, true);
     assert.equal(permit.hardStop, false);
-    assert.match(permit.reason, /flashfork_uci\.exe is running/);
+    assert.match(permit.reason, /foreground UCI engine is running \(uci_arena\.exe\)/);
   }
+});
+
+test('Stockfish analysis is interrupted promptly when a foreground engine appears', async () => {
+  const record = { fingerprint: Buffer.alloc(16), fen: '8/8/8/8/8/8/4K3/6k1 w - - 0 1', uciMove: 'e2e3' };
+  const catalog = {
+    aggregateObservations: () => [record],
+    evaluation: () => null,
+    setMetadata: () => {},
+  };
+  const config = {
+    stockfishAvailable: true,
+    analysis: { enabled: true, initialNodes: 1_000, confirmationNodes: 2_000, maximumWorkers: 1 },
+  };
+  let permitCalls = 0;
+  const governor = { permit: async () => (++permitCalls === 1
+    ? { allowed: true, workerLimit: 1 }
+    : { allowed: false, reason: 'foreground UCI engine is running (uci_arena.exe)' }) };
+  let closed = false;
+  const worker = {
+    fingerprint: 'test-stockfish',
+    start: async () => {},
+    analyze: async (_fen, _moves, _nodes, { signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('analysis aborted')), { once: true });
+    }),
+    close: async () => { closed = true; },
+  };
+  const started = performance.now();
+  const report = await analyzeObservations(catalog, config, governor,
+    { workerFactory: () => worker, revocationPollMs: 10 });
+  assert.equal(report.interrupted, true);
+  assert.equal(report.skipped, false);
+  assert.match(report.reason, /uci_arena\.exe/);
+  assert.ok(performance.now() - started < 1_000);
+  assert.equal(closed, true);
 });
 
 test('every hard resource stop rejects every work class', async (t) => {
@@ -616,9 +650,9 @@ test('daemon advances acquisition and integration publication while deferring he
   assert.equal(report.acquisition.requests, 1);
   assert.ok(report.integration?.snapshotId);
   assert.equal(report.analysis.skipped, true);
-  assert.match(report.analysis.reason, /flashfork_uci\.exe is running/);
+  assert.match(report.analysis.reason, /foreground UCI engine is running \(flashfork_uci\.exe\)/);
   assert.equal(report.maintenance.skipped, true);
-  assert.match(report.maintenance.reason, /flashfork_uci\.exe is running/);
+  assert.match(report.maintenance.reason, /foreground UCI engine is running \(flashfork_uci\.exe\)/);
   assert.ok(phases.some(({ phase, mode }) => phase === 'publication' && mode === 'courtesy'));
   assert.ok(phases.some(({ phase, mode }) => phase === 'analysis' && mode === 'backoff'));
 });

@@ -6,7 +6,7 @@ import { NativeResourceHelper } from './native_helper.mjs';
 
 const execFileAsync = promisify(execFile);
 const gibibyte = 1024 ** 3;
-const engineProcessNames = new Set(['flashfork_uci.exe']);
+const engineProcessNames = new Set(['flashfork_uci.exe', 'uci_arena.exe']);
 
 export const RESOURCE_WORK_CLASSES = Object.freeze({
   ACQUISITION: 'acquisition',
@@ -110,7 +110,8 @@ export class ResourceGovernor {
         ...engineProcessNames,
       ])];
       const runningProcesses = await this.processProbe(processNames);
-      engineProcessRunning = runningProcesses.some((name) => engineProcessNames.has(name.toLowerCase()));
+      const runningEngines = runningProcesses.filter((name) => engineProcessNames.has(name.toLowerCase()));
+      engineProcessRunning = runningEngines.length > 0;
       blockingProcesses = runningProcesses.filter((name) => !engineProcessNames.has(name.toLowerCase()));
       if (blockingProcesses.length) {
         mode = 'backoff'; allowed = false; hardStop = true;
@@ -121,7 +122,7 @@ export class ResourceGovernor {
         this.lastRampAt = this.now();
         if (!courtesyWorkClasses.has(workClass)) {
           mode = 'backoff'; allowed = false;
-          reason = `flashfork_uci.exe is running; ${workClass} is deferred`;
+          reason = `foreground UCI engine is running (${runningEngines.join(', ')}); ${workClass} is deferred`;
         }
       } else {
         this.idleSamples = idleRatio >= 0.80 ? this.idleSamples + 1 : 0;

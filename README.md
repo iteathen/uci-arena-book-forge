@@ -58,10 +58,11 @@ and end its scheduled instance, use `startup uninstall`. `daemon --detach`
 remains available for temporary sessions that are not managed by Windows.
 
 `pause` and `resume` are durable control commands. The daemon runs at low OS
-priority and uses phase-specific resource permits. While `flashfork_uci.exe` is
-running, low-rate Explorer acquisition and bounded integration publication stay
-enabled in courtesy mode; Stockfish analysis, file ingestion, qualified
-publication, and maintenance wait. Operator pause, battery/power limits,
+priority and uses phase-specific resource permits. While `flashfork_uci.exe` or
+`uci_arena.exe` is running, low-rate Explorer acquisition and bounded integration
+publication stay enabled in courtesy mode; Stockfish analysis is interrupted
+within two seconds, and file ingestion, qualified publication, and maintenance
+wait. Operator pause, battery/power limits,
 memory/disk pressure, and configured compiler/build processes stop every work
 class. Additional Stockfish workers ramp only after sustained idle samples. A
 75 GiB free-space floor and deterministic six-move per-position/two-million-

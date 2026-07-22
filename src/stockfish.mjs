@@ -5,6 +5,42 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 
+const defaultRevocationPollMs = 250;
+
+function revocationError(signal) {
+  const reason = signal?.reason ? `: ${String(signal.reason).slice(0, 256)}` : '';
+  const error = new Error(`Stockfish analysis interrupted${reason}`);
+  error.name = 'AbortError';
+  return error;
+}
+
+function monitorResourcePermit(governor, controller, onRevoked, intervalMs) {
+  let sampling = false;
+  let stopped = false;
+  const sample = async () => {
+    if (stopped || sampling || controller.signal.aborted) return;
+    sampling = true;
+    try {
+      const permit = await governor.permit();
+      if (!stopped && !permit.allowed) {
+        onRevoked(permit);
+        controller.abort(permit.reason || 'resource permission revoked');
+      }
+    } catch (error) {
+      if (!stopped) {
+        const permit = { allowed: false, reason: `resource permit failed: ${String(error?.message ?? error).slice(0, 256)}` };
+        onRevoked(permit);
+        controller.abort(permit.reason);
+      }
+    } finally {
+      sampling = false;
+    }
+  };
+  const timer = setInterval(() => { sample().catch(() => {}); }, intervalMs);
+  timer.unref?.();
+  return () => { stopped = true; clearInterval(timer); };
+}
+
 function hashFile(filename) {
   return new Promise((resolve, reject) => {
     const hash = createHash('sha256');
@@ -113,45 +149,60 @@ export class StockfishWorker {
     await this.collectUntil((line) => line === 'readyok', 15_000);
   }
 
-  async analyze(fen, candidates, nodes) {
+  async analyze(fen, candidates, nodes, { signal } = {}) {
     await this.start();
     if (!candidates.length) return new Map();
-    if (this.optionNames.has('MultiPV')) this.send(`setoption name MultiPV value ${candidates.length}`);
-    this.send(`position fen ${fen}`);
-    this.send(`go nodes ${nodes} searchmoves ${candidates.join(' ')}`);
-    const timeoutMs = Math.min(300_000, Math.max(30_000, Math.ceil(nodes / 10)));
-    const lines = await this.collectUntil((line) => line.startsWith('bestmove '), timeoutMs);
-    const results = new Map();
-    for (const line of lines) {
-      if (!line.startsWith('info ') || !line.includes(' pv ')) continue;
-      const pv = /\spv\s+(.+)$/.exec(line)?.[1];
-      if (!pv) continue;
-      const move = pv.split(/\s+/)[0];
-      if (!candidates.includes(move)) continue;
-      const cp = /\sscore cp (-?\d+)/.exec(line);
-      const mate = /\sscore mate (-?\d+)/.exec(line);
-      const wdl = /\swdl (\d+ \d+ \d+)/.exec(line);
-      const depth = /\sdepth (\d+)/.exec(line);
-      const multipv = /\smultipv (\d+)/.exec(line);
-      const result = {
-        scoreCp: cp ? Number(cp[1]) : null, mate: mate ? Number(mate[1]) : null,
-        wdl: wdl?.[1] ?? null, depth: Number(depth?.[1] ?? 0), pv,
-        multipv: Number(multipv?.[1] ?? 1),
-      };
-      const previous = results.get(move);
-      if (!previous || result.depth >= previous.depth) results.set(move, result);
+    const abort = () => {
+      const error = revocationError(signal);
+      this.failWaiters(error);
+      try { this.child?.kill(); } catch {}
+    };
+    if (signal?.aborted) throw revocationError(signal);
+    signal?.addEventListener('abort', abort, { once: true });
+    try {
+      if (this.optionNames.has('MultiPV')) this.send(`setoption name MultiPV value ${candidates.length}`);
+      this.send(`position fen ${fen}`);
+      this.send(`go nodes ${nodes} searchmoves ${candidates.join(' ')}`);
+      const timeoutMs = Math.min(300_000, Math.max(30_000, Math.ceil(nodes / 10)));
+      const waiting = this.collectUntil((line) => line.startsWith('bestmove '), timeoutMs);
+      if (signal?.aborted) abort();
+      const lines = await waiting;
+      const results = new Map();
+      for (const line of lines) {
+        if (!line.startsWith('info ') || !line.includes(' pv ')) continue;
+        const pv = /\spv\s+(.+)$/.exec(line)?.[1];
+        if (!pv) continue;
+        const move = pv.split(/\s+/)[0];
+        if (!candidates.includes(move)) continue;
+        const cp = /\sscore cp (-?\d+)/.exec(line);
+        const mate = /\sscore mate (-?\d+)/.exec(line);
+        const wdl = /\swdl (\d+ \d+ \d+)/.exec(line);
+        const depth = /\sdepth (\d+)/.exec(line);
+        const multipv = /\smultipv (\d+)/.exec(line);
+        const result = {
+          scoreCp: cp ? Number(cp[1]) : null, mate: mate ? Number(mate[1]) : null,
+          wdl: wdl?.[1] ?? null, depth: Number(depth?.[1] ?? 0), pv,
+          multipv: Number(multipv?.[1] ?? 1),
+        };
+        const previous = results.get(move);
+        if (!previous || result.depth >= previous.depth) results.set(move, result);
+      }
+      if (!results.size) throw new Error('Stockfish returned bestmove without parseable candidate analysis');
+      return results;
+    } finally {
+      signal?.removeEventListener('abort', abort);
     }
-    if (!results.size) throw new Error('Stockfish returned bestmove without parseable candidate analysis');
-    return results;
   }
 
   async close() {
     if (!this.child) return;
+    const child = this.child;
     try {
-      this.send('quit');
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      if (child.stdin.writable) child.stdin.write('quit\n');
       await new Promise((resolve) => {
-        const timer = setTimeout(() => { this.child?.kill(); resolve(); }, 2_000);
-        this.child.once('exit', () => { clearTimeout(timer); resolve(); });
+        const timer = setTimeout(() => { child.kill(); resolve(); }, 2_000);
+        child.once('exit', () => { clearTimeout(timer); resolve(); });
       });
     } finally {
       this.child = null;
@@ -168,11 +219,12 @@ function wdlBucket(wdl) {
   return 0;
 }
 
-async function analyzeGroup(catalog, config, worker, records) {
+async function analyzeGroup(catalog, config, worker, records, signal) {
   let moves = 0;
   const missing = records.filter((record) => !catalog.evaluation(record, worker.fingerprint, config.analysis.initialNodes));
   if (missing.length) {
-    const result = await worker.analyze(records[0].fen, records.map((record) => record.uciMove), config.analysis.initialNodes);
+    const result = await worker.analyze(records[0].fen, records.map((record) => record.uciMove),
+      config.analysis.initialNodes, { signal });
     const numericScores = [...result.values()].filter((entry) => entry.scoreCp !== null).map((entry) => entry.scoreCp);
     const bestScore = numericScores.length ? Math.max(...numericScores) : null;
     const bestWdlBucket = Math.max(...[...result.values()].map((entry) => wdlBucket(entry.wdl)));
@@ -196,7 +248,8 @@ async function analyzeGroup(catalog, config, worker, records) {
   });
   const unconfirmed = risky.filter((record) => !catalog.evaluation(record, worker.fingerprint, config.analysis.confirmationNodes));
   if (unconfirmed.length) {
-    const confirmation = await worker.analyze(records[0].fen, records.map((record) => record.uciMove), config.analysis.confirmationNodes);
+    const confirmation = await worker.analyze(records[0].fen, records.map((record) => record.uciMove),
+      config.analysis.confirmationNodes, { signal });
     const confirmationScores = [...confirmation.values()].filter((entry) => entry.scoreCp !== null).map((entry) => entry.scoreCp);
     const confirmationBest = confirmationScores.length ? Math.max(...confirmationScores) : null;
     const confirmationBestWdlBucket = Math.max(...[...confirmation.values()].map((entry) => wdlBucket(entry.wdl)));
@@ -220,7 +273,10 @@ async function analyzeGroup(catalog, config, worker, records) {
   return moves;
 }
 
-export async function analyzeObservations(catalog, config, governor) {
+export async function analyzeObservations(catalog, config, governor, {
+  workerFactory = (workerConfig) => new StockfishWorker(workerConfig),
+  revocationPollMs = defaultRevocationPollMs,
+} = {}) {
   const observations = catalog.aggregateObservations({ includeFixtures: false });
   if (!observations.length || !config.analysis.enabled || !config.stockfishAvailable) return { positions: 0, moves: 0, skipped: true };
   const grouped = new Map();
@@ -230,7 +286,7 @@ export async function analyzeObservations(catalog, config, governor) {
     grouped.get(identity).push(record);
   }
   const groups = [...grouped.values()];
-  const workers = [new StockfishWorker(config)];
+  const workers = [workerFactory(config)];
   let positions = 0;
   let moves = 0;
   try {
@@ -241,7 +297,7 @@ export async function analyzeObservations(catalog, config, governor) {
       if (!permit.allowed) break;
       const desiredWorkers = Math.max(1, Math.min(config.analysis.maximumWorkers, permit.workerLimit));
       while (workers.length < desiredWorkers) {
-        const worker = new StockfishWorker(config);
+        const worker = workerFactory(config);
         await worker.start();
         if (worker.fingerprint !== workers[0].fingerprint) {
           await worker.close();
@@ -250,7 +306,29 @@ export async function analyzeObservations(catalog, config, governor) {
         workers.push(worker);
       }
       const batch = groups.slice(index, index + workers.length);
-      const results = await Promise.all(batch.map((records, workerIndex) => analyzeGroup(catalog, config, workers[workerIndex], records)));
+      const controller = new AbortController();
+      let revokedPermit = null;
+      const stopMonitoring = monitorResourcePermit(governor, controller,
+        (revoked) => { revokedPermit = revoked; }, revocationPollMs);
+      const tasks = batch.map((records, workerIndex) => analyzeGroup(
+        catalog, config, workers[workerIndex], records, controller.signal));
+      let results;
+      try {
+        results = await Promise.all(tasks);
+      } catch (error) {
+        if (!controller.signal.aborted) throw error;
+        const settled = await Promise.allSettled(tasks);
+        const completed = settled.filter((entry) => entry.status === 'fulfilled');
+        moves += completed.reduce((sum, entry) => sum + entry.value, 0);
+        positions += completed.length;
+        return {
+          positions, moves, skipped: false, interrupted: true,
+          reason: revokedPermit?.reason || String(controller.signal.reason || 'resource permission revoked'),
+          workersUsed: workers.length, engineFingerprint: workers[0].fingerprint,
+        };
+      } finally {
+        stopMonitoring();
+      }
       moves += results.reduce((sum, count) => sum + count, 0);
       positions += batch.length;
       index += batch.length;

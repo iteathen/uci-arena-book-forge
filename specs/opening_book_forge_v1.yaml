@@ -262,9 +262,9 @@ validation:
 phase_specific_resource_permits_2026_07_20:
   status: active
   problem: >
-    A persistent flashfork_uci process currently blocks the complete daemon
-    cycle, including low-rate Explorer acquisition, so a continuously running
-    bot can prevent its own integration book from growing.
+    A persistent foreground UCI engine process must not block the complete
+    daemon cycle, including low-rate Explorer acquisition, or a continuously
+    running bot can prevent its own integration book from growing.
   work_classes:
     acquisition:
       cost: lightweight_network_and_sqlite
@@ -289,11 +289,13 @@ phase_specific_resource_permits_2026_07_20:
     - compiler_or_build_process
   rules:
     - "ResourceGovernor returns a typed permit for a requested work class; a generic allowed boolean cannot authorize every phase."
-    - "An active flashfork_uci process downgrades permitted lightweight work to courtesy but blocks heavy work; it is not by itself a global hard stop."
+    - "An active flashfork_uci.exe or uci_arena.exe process downgrades permitted lightweight work to courtesy but blocks heavy work; neither engine process is by itself a global hard stop."
+    - "Long-running Stockfish analysis polls its typed permit and terminates its current workers within two seconds after a foreground UCI engine appears."
     - "Acquisition retains its two-second revocation/abort contract and one-request-at-a-time rate limit."
     - "A running engine retains its loaded immutable snapshot, so a courtesy publication affects only future engines or explicit reloads."
     - "No permit path reads, logs, hashes, or exposes credential contents."
   validation:
-    - "Mocked process/resource states prove acquisition advances while flashfork_uci is present and analysis/maintenance do not."
+    - "Mocked process/resource states prove acquisition advances while either flashfork_uci.exe or uci_arena.exe is present and analysis/maintenance do not."
+    - "A blocking Stockfish analysis is interrupted promptly when its resource permit is revoked."
     - "Every hard stop blocks and aborts all work classes."
     - "Courtesy operation keeps measured foreground engine slowdown below two percent."
