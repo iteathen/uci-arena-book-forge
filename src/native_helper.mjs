@@ -32,6 +32,33 @@ export class NativeResourceHelper {
     }
   }
 
+  async applyProcessProfile(processId, { efficiencyCoreLimit = 0 } = {}) {
+    if (!this.config.nativeHelperAvailable) {
+      return {
+        schema: 'flashfork_book_forge_process_profile_v1', applied: false,
+        eco_qos: false, cpu_set_applied: false, reason: 'native helper unavailable',
+      };
+    }
+    if (!Number.isInteger(processId) || processId <= 0 ||
+        !Number.isInteger(efficiencyCoreLimit) || efficiencyCoreLimit < 0 || efficiencyCoreLimit > 2) {
+      throw new TypeError('Invalid Book Forge process profile request');
+    }
+    try {
+      const { stdout } = await execFileAsync(this.config.nativeHelper, [
+        '--apply-process-profile', String(processId), '--efficiency-cores', String(efficiencyCoreLimit),
+      ], { windowsHide: true, timeout: 2_000 });
+      const value = JSON.parse(stdout);
+      if (value.schema !== 'flashfork_book_forge_process_profile_v1') throw new Error('unexpected helper response');
+      return value;
+    } catch (error) {
+      return {
+        schema: 'flashfork_book_forge_process_profile_v1', applied: false,
+        eco_qos: false, cpu_set_applied: false,
+        reason: String(error?.message ?? error).slice(0, 256),
+      };
+    }
+  }
+
   close() {
     this.supervisor?.unref();
     this.supervisor = null;

@@ -29,6 +29,9 @@ const defaults = {
     threadsPerWorker: 1,
     hashMbPerWorker: 128,
     maximumWorkers: 8,
+    backgroundSipWorkers: 2,
+    backgroundSipEfficiencyCores: 2,
+    backgroundSipDutyCyclePercent: 50,
   },
   acquisition: {
     enabled: true,
@@ -64,6 +67,11 @@ const defaults = {
     intervalDays: 30,
     detailedCohortRetentionMonths: 24,
     snapshotVersionsPerChannel: 4,
+  },
+  daemon: {
+    cycleIntervalMs: 60_000,
+    failureBackoffInitialMs: 5_000,
+    failureBackoffMaximumMs: 300_000,
   },
 };
 
@@ -133,6 +141,20 @@ export async function loadConfig({ configFile, workspace } = {}) {
       config.acquisition.firstPublishMaxMinutes <= 0 || config.acquisition.integrationDebounceMinutes < 0 ||
       config.acquisition.crawlLcbGap <= 0) {
     throw new Error('Book Forge acquisition configuration violates its numeric or provider contract');
+  }
+  if (!Number.isInteger(config.analysis.threadsPerWorker) || config.analysis.threadsPerWorker < 1 ||
+      !Number.isInteger(config.analysis.maximumWorkers) || config.analysis.maximumWorkers < 1 ||
+      !Number.isInteger(config.analysis.backgroundSipWorkers) || config.analysis.backgroundSipWorkers < 1 ||
+      config.analysis.backgroundSipWorkers > config.analysis.maximumWorkers || config.analysis.backgroundSipWorkers > 2 ||
+      !Number.isInteger(config.analysis.backgroundSipEfficiencyCores) ||
+      config.analysis.backgroundSipEfficiencyCores < 1 || config.analysis.backgroundSipEfficiencyCores > 2 ||
+      !Number.isInteger(config.analysis.backgroundSipDutyCyclePercent) ||
+      config.analysis.backgroundSipDutyCyclePercent < 1 || config.analysis.backgroundSipDutyCyclePercent > 50 ||
+      !Number.isInteger(config.daemon.cycleIntervalMs) || config.daemon.cycleIntervalMs < 1_000 ||
+      !Number.isInteger(config.daemon.failureBackoffInitialMs) || config.daemon.failureBackoffInitialMs < 1_000 ||
+      !Number.isInteger(config.daemon.failureBackoffMaximumMs) ||
+      config.daemon.failureBackoffMaximumMs < config.daemon.failureBackoffInitialMs) {
+    throw new Error('Book Forge analysis or daemon configuration violates its bounded background-work contract');
   }
   config.paths = {
     catalog: path.join(config.workspace, 'catalog.sqlite'),

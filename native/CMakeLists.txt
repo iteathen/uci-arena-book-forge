@@ -7,7 +7,7 @@ endif()
 
 add_executable(book_forge_guard book_forge_guard.cpp)
 target_compile_features(book_forge_guard PRIVATE cxx_std_20)
-target_compile_definitions(book_forge_guard PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_definitions(book_forge_guard PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
 target_link_libraries(book_forge_guard PRIVATE PowrProf)
 
 add_executable(book_forge_launcher WIN32 book_forge_launcher.cpp)

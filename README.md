@@ -60,9 +60,15 @@ remains available for temporary sessions that are not managed by Windows.
 `pause` and `resume` are durable control commands. The daemon runs at low OS
 priority and uses phase-specific resource permits. While `flashfork_uci.exe` or
 `uci_arena.exe` is running, low-rate Explorer acquisition and bounded integration
-publication stay enabled in courtesy mode; Stockfish analysis is interrupted
-within two seconds, and file ingestion, qualified publication, and maintenance
-wait. Operator pause, battery/power limits,
+publication stay enabled in courtesy mode. Stockfish analysis continues in
+`background_sip`: no more than two one-thread workers, restricted to two CPU
+sets in Windows' lowest reported efficiency class, tagged EcoQoS/idle priority,
+and held to a 50-percent work/rest duty cycle. If heterogeneous CPU sets cannot
+be proven, it falls back to one low-priority worker without guessed affinity.
+A wider active analysis batch is interrupted and cleaned up within two seconds
+when a foreground engine appears, then a later cycle resumes with the bounded
+profile. File ingestion, qualified publication, and maintenance wait. Operator
+pause, battery/power limits,
 memory/disk pressure, and configured compiler/build processes stop every work
 class. Additional Stockfish workers ramp only after sustained idle samples. A
 75 GiB free-space floor and deterministic six-move per-position/two-million-
@@ -72,7 +78,10 @@ retired PV text, and retains four snapshot generations per channel. Publishing
 identical content is a no-op. A transient Stockfish startup, interrogation, or
 command timeout is contained to that analysis stage: workers are closed, the
 bounded cycle report records the error, and maintenance plus later cycles
-continue without treating partial analysis as qualified evidence.
+continue without treating partial analysis as qualified evidence. Unexpected
+cycle-level failures also recover inside the continuous daemon, with a live
+heartbeat and exponential retry from five seconds through five minutes;
+one-shot runs and startup/lock/configuration failures remain fail-fast.
 
 `status` includes the current acquisition frontier and request budget plus the
 daemon phase, heartbeat, cycle timestamps, and bounded last-cycle report. The
@@ -82,8 +91,9 @@ reserved as a default-off audit source; it is not required for Explorer-backed
 book growth and can never contribute overlapping counts to a publication.
 
 The producer is Node-only. On Windows, an optional tiny native resource guard
-adds Job Object cleanup, EcoQoS/very-low I/O priority, battery state, and real
-input-idle telemetry—OS controls Node does not expose:
+adds Job Object cleanup, EcoQoS/very-low I/O priority, heterogeneous CPU-set
+selection, battery state, and real input-idle telemetry—OS controls Node does
+not expose:
 
 ```powershell
 cmake -S tools/book_forge/native -B tools/book_forge/native/build
