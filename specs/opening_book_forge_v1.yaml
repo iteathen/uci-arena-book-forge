@@ -220,7 +220,7 @@ daemon_observability:
     - "Status reports persisted phase, heartbeat, cycle timestamps, resource mode, bounded last report, and a redacted last error."
     - "A recoverable Stockfish-stage error remains visible in the bounded cycle report without changing the daemon phase to failed."
     - "A recoverable cycle-level error is visible as phase recovering with the consecutive failure count, bounded retry delay, next retry time, and redacted error in last_report while heartbeat updates continue."
-    - "The Windows native supervisor terminates a stale daemon so Task Scheduler can apply its configured failure restart."
+    - "The Windows native guard terminates a stale daemon; the persistent native launcher then restarts it with bounded backoff, while Task Scheduler remains a second fallback if the launcher itself exits."
 
 cli:
   commands: [init, source_add, source_quarantine, source_retire, source_restore, acquisition_run, acquisition_status, acquisition_retry_auth, daemon, pause, resume, status, snapshot_build, qualification_record, maintain, validate, publish, startup_install, startup_status, startup_uninstall]
@@ -237,14 +237,15 @@ windows_startup:
     pe_subsystem: windows_gui
     node_creation_flags: [CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT]
     stdio: windows_null_device
-    supervision: "The launcher waits for the foreground Node daemon and returns its exit code to Task Scheduler."
+    supervision: "The scheduled launcher owns the foreground Node daemon, restarts every unexpected daemon exit after exponential backoff from five seconds through five minutes, and stays alive until Task Scheduler stops the task."
   rules:
     - "startup install registers the absolute native launcher as the task action and passes absolute current Node, Book Forge CLI, workspace, optional config, and repository working directory paths."
     - "The scheduled action runs a Windows GUI-subsystem launcher which creates the foreground Node daemon with no console window; it must not add a second detach layer."
     - "Closing any interactive terminal cannot deliver console-close or Ctrl-C events to the scheduled Book Forge process tree."
-    - "Launcher startup fails closed when the native launcher is unavailable, and launcher or daemon failure remains visible through Task Scheduler exit status and daemon heartbeat state."
+    - "Launcher startup fails closed when the native launcher is unavailable; a daemon failure remains visible through stale/failed daemon heartbeat state while the launcher retries, and a launcher failure remains visible through Task Scheduler exit status."
     - "The task uses the interactive user token at least privilege, starts after logon, has no execution time limit, and restarts after failure."
-    - "Continuous-daemon cycle failures recover inside the foreground Node process; Task Scheduler restart remains the fallback for process crashes, stale-heartbeat termination, and irrecoverable startup failures."
+    - "Continuous-daemon cycle failures recover inside the foreground Node process; the persistent launcher recovers process crashes, stale-heartbeat termination, and irrecoverable startup failures; Task Scheduler restart remains the fallback for launcher failure."
+    - "The launcher resets its restart backoff after a daemon survives at least five minutes, and never treats the continuous daemon's zero exit code as permission to leave the scheduled task idle."
     - "The task allows battery startup because the Book Forge resource governor immediately enters backoff on battery or battery-saver state."
     - "Multiple task instances are forbidden and the daemon lock remains the final single-instance authority."
     - "Installation is idempotent, starts the task immediately by default, writes non-secret registration evidence in the workspace, and never embeds credentials."
@@ -252,6 +253,7 @@ windows_startup:
   validation:
     - task_xml_contract_test
     - launcher_pe_gui_subsystem_and_create_no_window_smoke
+    - launcher_restarts_failed_daemon_without_task_scheduler_intervention
     - install_query_and_immediate_run_smoke
     - scheduled_process_topology_is_launcher_then_node_without_console
     - startup_status_reports_registered_absolute_action

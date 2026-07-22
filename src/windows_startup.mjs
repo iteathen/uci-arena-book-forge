@@ -26,7 +26,7 @@ export function quoteWindowsArgument(value) {
 }
 
 export function startupAction(config) {
-  const argumentsList = [path.resolve(process.execPath), cliPath, 'daemon', '--workspace', config.workspace];
+  const argumentsList = ['--restart', path.resolve(process.execPath), cliPath, 'daemon', '--workspace', config.workspace];
   if (config.configFile) argumentsList.push('--config', config.configFile);
   return {
     command: path.resolve(config.nativeLauncher),

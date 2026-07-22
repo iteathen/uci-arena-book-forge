@@ -85,7 +85,7 @@ test('Windows startup task uses a windowless native launcher with absolute paths
   assert.equal(path.isAbsolute(action.command), true);
   assert.equal(path.isAbsolute(action.workingDirectory), true);
   assert.equal(action.command, config.nativeLauncher);
-  assert.ok(action.arguments.startsWith(quoteWindowsArgument(path.resolve(process.execPath))));
+  assert.ok(action.arguments.startsWith(`--restart ${quoteWindowsArgument(path.resolve(process.execPath))}`));
   assert.match(action.arguments, / daemon --workspace /);
   assert.doesNotMatch(action.arguments, /--detach/);
   assert.equal(quoteWindowsArgument('C:\\plain'), 'C:\\plain');
@@ -918,6 +918,7 @@ test('native launcher is a GUI process that runs Node without a console and prop
   const { stdout } = await execFileAsync(config.nativeLauncher, ['--probe'], { windowsHide: true, timeout: 5_000 });
   assert.deepEqual(JSON.parse(stdout), {
     schema: 'flashfork_book_forge_launcher_probe_v1', windows_gui_subsystem: true, create_no_window: true,
+    persistent_restart: true, initial_restart_delay_ms: 5_000, maximum_restart_delay_ms: 300_000,
   });
 
   const fixture = path.join(config.workspace, 'launcher fixture.mjs');
@@ -927,4 +928,35 @@ test('native launcher is a GUI process that runs Node without a console and prop
     [process.execPath, fixture, marker, 'windowless child completed', '23'], { windowsHide: true, timeout: 10_000 }),
   (error) => error.code === 23);
   assert.equal(await readFile(marker, 'utf8'), 'windowless child completed');
+});
+
+test('native launcher restarts a failed continuous daemon without Task Scheduler intervention', async (t) => {
+  const config = await workspace(t);
+  t.after(() => rm(config.workspace, { recursive: true, force: true }));
+  if (!config.nativeLauncherAvailable) return t.skip('native windowless launcher is not built');
+
+  const fixture = path.join(config.workspace, 'restart fixture.mjs');
+  const marker = path.join(config.workspace, 'restart attempts.txt');
+  await writeFile(fixture, `
+import { readFile, writeFile } from 'node:fs/promises';
+let attempts = 0;
+try { attempts = Number(await readFile(process.argv[2], 'utf8')); } catch {}
+attempts += 1;
+await writeFile(process.argv[2], String(attempts));
+if (attempts === 1) process.exit(23);
+setInterval(() => {}, 1000);
+`, 'utf8');
+  const launcher = spawn(config.nativeLauncher, ['--restart', process.execPath, fixture, marker], {
+    stdio: 'ignore', windowsHide: true,
+  });
+  t.after(() => { try { launcher.kill(); } catch {} });
+  const deadline = Date.now() + 12_000;
+  let attempts = 0;
+  while (Date.now() < deadline) {
+    try { attempts = Number(await readFile(marker, 'utf8')); } catch {}
+    if (attempts >= 2) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.equal(attempts, 2);
+  assert.equal(launcher.exitCode, null);
 });
