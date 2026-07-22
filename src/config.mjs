@@ -58,7 +58,7 @@ const defaults = {
     pauseAvailableMemoryGb: 6,
     courtesyCpuPercent: 20,
     idleCpuPercent: 80,
-    priorityProcessNames: ['flashfork_uci.exe', 'msbuild.exe', 'cl.exe'],
+    priorityProcessNames: ['flashfork_uci.exe', 'uci_arena.exe', 'msbuild.exe', 'cl.exe'],
   },
   maintenance: {
     intervalDays: 30,

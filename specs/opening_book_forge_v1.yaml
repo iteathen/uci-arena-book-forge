@@ -192,6 +192,7 @@ resource_governor:
   windows_helper_scope: [job_objects, eco_qos, input_idle, io_priority]
   rules:
     - "Back off quickly and ramp slowly with hysteresis."
+    - "Both flashfork_uci.exe development binaries and uci_arena.exe deployment binaries are priority engine processes; heavy Forge work yields while either is running."
     - "Configured priority processes, battery use, thermal throttling, memory pressure, and disk pressure override idle harvesting."
     - "Acquisition requests are abortable and stop within two seconds after resource permission is revoked."
 

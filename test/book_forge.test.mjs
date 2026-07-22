@@ -135,6 +135,10 @@ test('configuration copies defaults and forbids redirecting the credential heade
   first.acquisition.resourcePollMs = 10;
   const second = await loadConfig({ workspace: first.workspace });
   assert.equal(second.acquisition.resourcePollMs, 1_000);
+  assert.deepEqual(second.resources.priorityProcessNames.slice(0, 2), [
+    'flashfork_uci.exe',
+    'uci_arena.exe',
+  ]);
   const filename = path.join(first.workspace, 'unsafe.config.json');
   await writeFile(filename, JSON.stringify({
     schema: 'flashfork_book_forge_config_v1', acquisition: { endpoint: 'https://example.com/lichess' },
