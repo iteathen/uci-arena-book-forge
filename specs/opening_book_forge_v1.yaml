@@ -229,6 +229,13 @@ daemon_observability:
   stale_seconds: 300
   report_retention: last_cycle_only
   phases: [acquisition, ingestion, analysis, publication, maintenance, sleep, recovering]
+  public_status_contract:
+    schema: flashfork_book_forge_status_v2
+    control_singleton_type: boolean
+    control_paused_type: boolean
+    rule: >
+      Public JSON normalizes SQLite integer storage into typed booleans; storage
+      representation must not leak across the CLI contract.
   rules:
     - "Status reports persisted phase, heartbeat, cycle timestamps, resource mode, bounded last report, and a redacted last error."
     - "A recoverable Stockfish-stage error remains visible in the bounded cycle report without changing the daemon phase to failed."

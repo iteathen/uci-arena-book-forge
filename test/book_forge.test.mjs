@@ -268,6 +268,8 @@ test('Book Forge status exposes bounded daemon heartbeat and acquisition telemet
     last_report: { payload: 'x'.repeat(100_000) } });
   const status = catalog.status();
   assert.equal(status.schema, 'flashfork_book_forge_status_v2');
+  assert.equal(status.control.singleton, true);
+  assert.equal(status.control.paused, false);
   assert.equal(status.daemon.pid, 123);
   assert.equal(status.daemon.phase, 'acquisition');
   assert.equal(status.daemon.stale, false);
