@@ -15,7 +15,7 @@
   ],
   "include_by_target": {
     "windows-x86_64": [
-      {"source": "provider_stage/book_forge_native", "target": "."}
+      {"source": "provider_stage/book_forge_native", "target": "tools/book_forge"}
     ]
   },
   "entrypoints": {"cli": "tools/book_forge/src/cli.mjs"},
