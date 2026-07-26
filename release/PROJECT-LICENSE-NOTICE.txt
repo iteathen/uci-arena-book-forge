@@ -1,0 +1,10 @@
+Copyright (C) 2026 Josh Y. Oshiro
+
+The UCI Arena project files are licensed under the GNU Affero General Public
+License, version 3 or (at your option) any later version
+(SPDX-License-Identifier: AGPL-3.0-or-later).
+
+The complete corresponding source and the GNU AGPL license text are published
+with each component release. Third-party software and data retain their
+respective licenses. Release bundles must include those third-party license
+texts and any required source offers alongside the corresponding files.

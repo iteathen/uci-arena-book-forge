@@ -1,18 +1,50 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export const repositoryRoot = path.resolve(packageRoot, '..', '..');
+export const suiteRoot = process.env.UCI_ARENA_SUITE_ROOT?.trim()
+  ? path.resolve(process.env.UCI_ARENA_SUITE_ROOT)
+  : repositoryRoot;
+
+function defaultWorkspace() {
+  if (process.platform === 'win32') {
+    const local = process.env.LOCALAPPDATA?.trim() || os.homedir();
+    return path.join(local, 'UCI Arena', 'Book Forge');
+  }
+  const state = process.env.XDG_STATE_HOME?.trim()
+    || path.join(os.homedir(), '.local', 'state');
+  return path.join(state, 'uci-arena', 'book-forge');
+}
+
+function defaultTokenFile() {
+  if (process.platform === 'win32') {
+    const config = process.env.APPDATA?.trim() || os.homedir();
+    return path.join(config, 'UCI Arena', 'secrets', 'lichess_bot_token.txt');
+  }
+  const config = process.env.XDG_CONFIG_HOME?.trim()
+    || path.join(os.homedir(), '.config');
+  return path.join(config, 'uci-arena', 'secrets', 'lichess_bot_token.txt');
+}
+
+function suiteExecutable(windowsPath, unixPath) {
+  return path.join(suiteRoot, process.platform === 'win32' ? windowsPath : unixPath);
+}
 
 const defaults = {
   schema: 'flashfork_book_forge_config_v1',
-  workspace: process.env.BOOK_FORGE_ROOT || 'E:/book-forge',
+  workspace: process.env.BOOK_FORGE_ROOT || defaultWorkspace(),
   policyFile: path.join(packageRoot, 'policy', 'strong_rare_v1.policy'),
-  stockfish: path.join(repositoryRoot, 'third_party', 'bin', 'stockfish.exe'),
-  nativeHelper: path.join(packageRoot, 'native', 'build', 'Release', 'book_forge_guard.exe'),
-  nativeLauncher: path.join(packageRoot, 'native', 'build', 'Release', 'book_forge_launcher.exe'),
+  stockfish: process.env.UCI_ARENA_STOCKFISH?.trim()
+    || suiteExecutable('components/stockfish.engine/current/stockfish.exe',
+      'components/stockfish.engine/current/stockfish'),
+  nativeHelper: path.join(packageRoot, 'native', 'bin',
+    process.platform === 'win32' ? 'book_forge_guard.exe' : 'book_forge_guard'),
+  nativeLauncher: path.join(packageRoot, 'native', 'bin',
+    process.platform === 'win32' ? 'book_forge_launcher.exe' : 'book_forge_launcher'),
   channels: { integration: true, qualified: true },
   ingestion: {
     minimumRating: 2000,
@@ -37,7 +69,7 @@ const defaults = {
     enabled: true,
     provider: 'lichess_opening_explorer',
     endpoint: 'https://explorer.lichess.org/lichess',
-    tokenFile: path.join(repositoryRoot, 'secrets', 'lichess_bot_token.txt'),
+    tokenFile: defaultTokenFile(),
     variant: 'standard',
     speeds: ['rapid', 'classical'],
     ratings: [2000, 2200, 2500],

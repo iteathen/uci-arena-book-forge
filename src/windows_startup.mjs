@@ -3,7 +3,7 @@ import { readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { repositoryRoot } from './config.mjs';
+import { packageRoot } from './config.mjs';
 
 const execFileAsync = promisify(execFile);
 export const startupTaskName = 'UCI Arena Book Forge';
@@ -31,7 +31,7 @@ export function startupAction(config) {
   return {
     command: path.resolve(config.nativeLauncher),
     arguments: argumentsList.map(quoteWindowsArgument).join(' '),
-    workingDirectory: repositoryRoot,
+    workingDirectory: packageRoot,
   };
 }
 

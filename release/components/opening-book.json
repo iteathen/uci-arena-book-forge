@@ -1,0 +1,14 @@
+{
+  "schema": "arena_provider_component_definition_v1",
+  "component_id": "opening_book.standard",
+  "source_repository": "iteathen/UCI_Arena",
+  "include": [
+    {"source": "provider_stage/opening_book", "target": "opening_books"},
+    {"source": "release/PROJECT-LICENSE-NOTICE.txt", "target": "licenses/LICENSE.txt"}
+  ],
+  "entrypoints": {},
+  "capabilities": ["opening_book", "integration_snapshot"],
+  "startup": {},
+  "data_paths": [],
+  "tests": ["bootstrap_snapshot_validation", "mutual_digest_validation"]
+}

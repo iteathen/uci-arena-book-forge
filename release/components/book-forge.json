@@ -1,0 +1,26 @@
+{
+  "schema": "arena_provider_component_definition_v1",
+  "component_id": "book_forge.service",
+  "source_repository": "iteathen/UCI_Arena",
+  "include": [
+    {"source": "tools/book_forge/src", "target": "src"},
+    {"source": "tools/book_forge/node_modules", "target": "node_modules"},
+    {"source": "tools/book_forge/fixtures", "target": "fixtures"},
+    {"source": "tools/book_forge/policy", "target": "policy"},
+    {"source": "tools/book_forge/package.json", "target": "package.json"},
+    {"source": "tools/book_forge/package-lock.json", "target": "package-lock.json"},
+    {"source": "tools/book_forge/README.md", "target": "README.md"},
+    {"source": "release/PROJECT-LICENSE-NOTICE.txt", "target": "licenses/LICENSE.txt"}
+  ],
+  "include_by_target": {
+    "windows-x86_64": [
+      {"source": "provider_stage/book_forge_native", "target": "."}
+    ]
+  },
+  "entrypoints": {"cli": "src/cli.mjs"},
+  "capabilities": ["status", "start", "stop", "pause", "resume", "startup_install", "startup_uninstall"],
+  "startup": {"windows": "per_user_task_scheduler", "linux": "per_user_systemd"},
+  "data_paths": ["workspace"],
+  "dependency_lock_identities": {"node": ">=24.15.0", "npm_lock": "tools/book_forge/package-lock.json"},
+  "tests": ["book_forge_tests", "startup_contract", "bootstrap_snapshot_validation"]
+}
