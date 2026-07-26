@@ -322,3 +322,19 @@ phase_specific_resource_permits_2026_07_20:
     - "A blocking Stockfish analysis is interrupted promptly when its resource permit is revoked or its active worker/profile allocation exceeds a newly reduced permit."
     - "Every hard stop blocks and aborts all work classes."
     - "Courtesy operation keeps measured foreground engine slowdown below two percent."
+
+shared_heavy_background_lease_2026_07_25:
+  status: active
+  authority: uci_arena_evidence_service_v1
+  schema: uci_arena_background_resource_lease_v1
+  producers: [book_forge, uci_arena_evidence_service]
+  rules:
+    - "Book Forge acquisition, status, integration publication, and qualified publication remain courtesy work and do not require the shared heavy lease."
+    - "Stockfish analysis, source ingestion, and maintenance acquire the fair FIFO heavy-background lease before starting."
+    - "A foreground Restaurant or Arena request outranks every background request."
+    - "A busy lease defers the phase without failing the Book Forge daemon or losing pending work."
+    - "Dead-owner lease recovery validates pid, nonce, scope, and heartbeat before removal."
+  validation:
+    - background_producers_are_mutually_exclusive
+    - courtesy_work_continues_without_heavy_lease
+    - foreground_request_revokes_background_within_two_seconds

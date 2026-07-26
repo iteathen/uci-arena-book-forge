@@ -760,6 +760,43 @@ test('daemon advances acquisition, integration publication, and bounded analysis
   assert.ok(phases.some(({ phase, mode }) => phase === 'analysis' && mode === 'background_sip'));
 });
 
+test('shared lease contention defers Book Forge heavy phases while courtesy work continues', async (t) => {
+  const config = await workspace(t);
+  config.channels.qualified = false;
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const source = await registerInput(catalog, { fixtureId: 'bootstrap_v1' });
+  await ingestSource(catalog, source, config);
+  const governor = mockedResourceGovernor(config, catalog);
+  t.after(() => governor.close());
+  const acquisition = {
+    async run() {
+      return { enabled: true, requests: 1, positions: 1, moves: 1, enqueued: 0, stopped: '' };
+    },
+  };
+  let leaseAttempts = 0;
+  const report = await runCycle(
+    catalog,
+    config,
+    governor,
+    acquisition,
+    () => {},
+    1,
+    false,
+    async () => {
+      leaseAttempts += 1;
+      return null;
+    },
+  );
+  assert.equal(report.acquisition.requests, 1);
+  assert.ok(report.integration?.snapshotId);
+  assert.equal(report.analysis.skipped, true);
+  assert.match(report.analysis.reason, /shared heavy background lease is busy/);
+  assert.equal(report.maintenance.skipped, true);
+  assert.match(report.maintenance.reason, /shared heavy background lease is busy/);
+  assert.ok(leaseAttempts >= 3);
+});
+
 test('resource governor enters backoff before starting work under disk pressure', async (t) => {
   const config = await workspace(t);
   config.resources.minimumFreeWorkspaceGb = 1_000_000_000;
