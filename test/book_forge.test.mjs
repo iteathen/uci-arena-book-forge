@@ -100,7 +100,11 @@ test('Windows startup task uses a windowless native launcher with absolute paths
   assert.match(xml, /<RestartOnFailure>/);
   assert.match(xml, /Book &amp; Forge/);
   config.nativeLauncherAvailable = false;
-  await assert.rejects(installWindowsStartup(config), /windowless launcher is unavailable/);
+  if (process.platform === 'win32') {
+    await assert.rejects(installWindowsStartup(config), /windowless launcher is unavailable/);
+  } else {
+    await assert.rejects(installWindowsStartup(config), /supported only on Windows/);
+  }
 });
 
 test('catalog schema three migrates acquisition authority columns without losing sources', async (t) => {
