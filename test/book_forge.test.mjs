@@ -272,6 +272,8 @@ test('Book Forge status exposes bounded daemon heartbeat and acquisition telemet
     last_report: { payload: 'x'.repeat(100_000) } });
   const status = catalog.status();
   assert.equal(status.schema, 'flashfork_book_forge_status_v2');
+  assert.equal(status.control.singleton, true);
+  assert.equal(status.control.paused, false);
   assert.equal(status.daemon.pid, 123);
   assert.equal(status.daemon.phase, 'acquisition');
   assert.equal(status.daemon.stale, false);
@@ -762,6 +764,44 @@ test('daemon advances acquisition, integration publication, and bounded analysis
   assert.match(report.maintenance.reason, /foreground UCI engine is running \(flashfork_uci\.exe\)/);
   assert.ok(phases.some(({ phase, mode }) => phase === 'publication' && mode === 'courtesy'));
   assert.ok(phases.some(({ phase, mode }) => phase === 'analysis' && mode === 'background_sip'));
+});
+
+test('shared lease contention defers Book Forge heavy phases while courtesy work continues', async (t) => {
+  const config = await workspace(t);
+  config.channels.qualified = false;
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const source = await registerInput(catalog, { fixtureId: 'bootstrap_v1' });
+  await ingestSource(catalog, source, config);
+  const governor = mockedResourceGovernor(config, catalog);
+  t.after(() => governor.close());
+  const acquisition = {
+    async run() {
+      return { enabled: true, requests: 1, positions: 1, moves: 1, enqueued: 0, stopped: '' };
+    },
+  };
+  let leaseAttempts = 0;
+  const report = await runCycle(
+    catalog,
+    config,
+    governor,
+    acquisition,
+    () => {},
+    1,
+    false,
+    analyzeObservations,
+    async () => {
+      leaseAttempts += 1;
+      return null;
+    },
+  );
+  assert.equal(report.acquisition.requests, 1);
+  assert.ok(report.integration?.snapshotId);
+  assert.equal(report.analysis.skipped, true);
+  assert.match(report.analysis.reason, /shared heavy background lease is busy/);
+  assert.equal(report.maintenance.skipped, true);
+  assert.match(report.maintenance.reason, /shared heavy background lease is busy/);
+  assert.ok(leaseAttempts >= 3);
 });
 
 test('resource governor enters backoff before starting work under disk pressure', async (t) => {

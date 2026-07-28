@@ -22,7 +22,8 @@ authority:
 runtime:
   node_minimum: 24.15.0
   package_root: tools/book_forge
-  default_workspace_windows: 'E:\book-forge'
+  default_workspace_windows: '%LOCALAPPDATA%\UCI Arena\Book Forge'
+  default_workspace_linux: '$XDG_STATE_HOME/uci-arena/book-forge'
   portable_workspace_environment: BOOK_FORGE_ROOT
   dependencies:
     chess_js: 1.4.0
@@ -164,6 +165,18 @@ publication:
     UCI opening-book adapter. It is intentionally useful before strength
     qualification completes; qualified remains the authority for strength and
     release-promotion claims.
+  installer_bootstrap:
+    owner: provider_release_ci
+    component_id: opening_book.standard
+    source: deterministic_integration_fixture
+    required_label: integration_not_strength_qualified
+    purpose: >
+      Ensure a clean suite installation has a valid local opening book while
+      Book Forge begins bounded acquisition and qualification.
+    rules:
+      - "The bootstrap is compiled and mutually validated by Book Forge during the provider release build."
+      - "The installer and Manager must display its integration status and may not claim qualified playing strength."
+      - "A later qualified immutable snapshot atomically supersedes it without changing the component identity."
 
 bounded_growth:
   maximum_published_moves_per_position: 6
@@ -216,6 +229,13 @@ daemon_observability:
   stale_seconds: 300
   report_retention: last_cycle_only
   phases: [acquisition, ingestion, analysis, publication, maintenance, sleep, recovering]
+  public_status_contract:
+    schema: flashfork_book_forge_status_v2
+    control_singleton_type: boolean
+    control_paused_type: boolean
+    rule: >
+      Public JSON normalizes SQLite integer storage into typed booleans; storage
+      representation must not leak across the CLI contract.
   rules:
     - "Status reports persisted phase, heartbeat, cycle timestamps, resource mode, bounded last report, and a redacted last error."
     - "A recoverable Stockfish-stage error remains visible in the bounded cycle report without changing the daemon phase to failed."
@@ -257,6 +277,27 @@ windows_startup:
     - install_query_and_immediate_run_smoke
     - scheduled_process_topology_is_launcher_then_node_without_console
     - startup_status_reports_registered_absolute_action
+
+linux_startup:
+  owner: book_forge_cli
+  mechanism: per_user_systemd_service
+  unit_name: uci-arena-book-forge.service
+  privilege: invoking_user
+  rules:
+    - "The unit uses the installed package root as WorkingDirectory."
+    - "ExecStart contains absolute private-Node, CLI, workspace, and optional config paths."
+    - "Installation is idempotent and enables and starts the unit immediately."
+    - "No secret value is stored in the unit; only a configuration or token-file path may be referenced."
+    - "The daemon lock remains final single-instance authority."
+
+relocatable_install:
+  package_root: derived_from_import_meta
+  suite_root: explicit_UCI_ARENA_SUITE_ROOT_or_source_checkout_fallback
+  repository_checkout_required: false
+  default_token_file: per_user_config_directory_reference
+  rules:
+    - "Installed startup registrations use packageRoot rather than repositoryRoot."
+    - "Stockfish and native helper locations may be supplied by explicit component configuration."
 
 validation:
   required:
@@ -322,3 +363,19 @@ phase_specific_resource_permits_2026_07_20:
     - "A blocking Stockfish analysis is interrupted promptly when its resource permit is revoked or its active worker/profile allocation exceeds a newly reduced permit."
     - "Every hard stop blocks and aborts all work classes."
     - "Courtesy operation keeps measured foreground engine slowdown below two percent."
+
+shared_heavy_background_lease_2026_07_25:
+  status: active
+  authority: uci_arena_evidence_service_v1
+  schema: uci_arena_background_resource_lease_v1
+  producers: [book_forge, uci_arena_evidence_service]
+  rules:
+    - "Book Forge acquisition, status, integration publication, and qualified publication remain courtesy work and do not require the shared heavy lease."
+    - "Stockfish analysis, source ingestion, and maintenance acquire the fair FIFO heavy-background lease before starting."
+    - "A foreground Restaurant or Arena request outranks every background request."
+    - "A busy lease defers the phase without failing the Book Forge daemon or losing pending work."
+    - "Dead-owner lease recovery validates pid, nonce, scope, and heartbeat before removal."
+  validation:
+    - background_producers_are_mutually_exclusive
+    - courtesy_work_continues_without_heavy_lease
+    - foreground_request_revokes_background_within_two_seconds

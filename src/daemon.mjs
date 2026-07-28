@@ -1,5 +1,6 @@
 import { open, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { acquireResourceLease } from '../../../arena/lib/background_resource_lease.mjs';
 import { ExplorerAcquisition } from './acquisition.mjs';
 import { buildSnapshot } from './compiler.mjs';
 import { discoverInbox, ingestSource } from './ingest.mjs';
@@ -10,8 +11,42 @@ import { analyzeObservations } from './stockfish.mjs';
 
 function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
 
-function scopedGovernor(governor, workClass) {
-  return { permit: () => governor.permit(workClass) };
+function scopedGovernor(governor, workClass, lease = null) {
+  return {
+    permit: async () => {
+      const revocation = lease?.revocationReason();
+      if (revocation) {
+        return {
+          allowed: false,
+          mode: 'preempt',
+          reason: revocation,
+          sampledAt: new Date().toISOString(),
+        };
+      }
+      return governor.permit(workClass);
+    },
+  };
+}
+
+async function defaultHeavyLeaseFactory() {
+  return acquireResourceLease({
+    producer: 'book_forge',
+    priority: 'background',
+    timeoutMs: 250,
+  });
+}
+
+async function withHeavyLease(factory, work) {
+  const lease = await factory();
+  if (!lease) return { acquired: false, reason: 'shared heavy background lease is busy' };
+  const heartbeat = setInterval(() => lease.heartbeat(), 2_000);
+  heartbeat.unref?.();
+  try {
+    return { acquired: true, value: await work(lease) };
+  } finally {
+    clearInterval(heartbeat);
+    lease.release();
+  }
 }
 
 async function acquireLock(config) {
@@ -63,7 +98,8 @@ function acquisitionBootstrapReady(catalog, config) {
 
 export async function runCycle(catalog, config, governor = new ResourceGovernor(config, catalog),
     acquisition = new ExplorerAcquisition(catalog, config), setPhase = () => {}, acquisitionMaxRequests = undefined,
-    acquisitionOnly = false, analyzer = analyzeObservations) {
+    acquisitionOnly = false, analyzer = analyzeObservations,
+    heavyLeaseFactory = defaultHeavyLeaseFactory) {
   const acquisitionPermit = await governor.permit(RESOURCE_WORK_CLASSES.ACQUISITION);
   const report = { acquisition: null, discovered: [], ingested: [], integration: null, analysis: null, qualified: null, maintenance: null, resource: acquisitionPermit };
   if (!acquisitionPermit.allowed) {
@@ -76,23 +112,32 @@ export async function runCycle(catalog, config, governor = new ResourceGovernor(
   report.acquisition = await acquisition.run(governor, { maxRequests: acquisitionMaxRequests });
   if (acquisitionOnly) return report;
 
-  const ingestionGovernor = scopedGovernor(governor, RESOURCE_WORK_CLASSES.INGESTION_AND_MAINTENANCE);
   const ingestionPermit = await governor.permit(RESOURCE_WORK_CLASSES.INGESTION_AND_MAINTENANCE);
   report.resource = ingestionPermit;
   setPhase('ingestion', ingestionPermit.mode);
   if (ingestionPermit.allowed) {
-    report.discovered = await discoverInbox(catalog, config, ingestionGovernor);
-    for (const source of catalog.pendingSources()) {
-      const permit = await governor.permit(RESOURCE_WORK_CLASSES.INGESTION_AND_MAINTENANCE);
-      report.resource = permit;
-      if (!permit.allowed) break;
-      try {
-        const telemetry = await ingestSource(catalog, source, config, ingestionGovernor);
-        report.ingested.push({ sourceId: Number(source.id), ...telemetry });
-        if (telemetry.interrupted) break;
-      } catch (error) {
-        report.ingested.push({ sourceId: Number(source.id), error: error.message });
+    const leased = await withHeavyLease(heavyLeaseFactory, async (lease) => {
+      const ingestionGovernor = scopedGovernor(
+        governor,
+        RESOURCE_WORK_CLASSES.INGESTION_AND_MAINTENANCE,
+        lease,
+      );
+      report.discovered = await discoverInbox(catalog, config, ingestionGovernor);
+      for (const source of catalog.pendingSources()) {
+        const permit = await ingestionGovernor.permit();
+        report.resource = permit;
+        if (!permit.allowed) break;
+        try {
+          const telemetry = await ingestSource(catalog, source, config, ingestionGovernor);
+          report.ingested.push({ sourceId: Number(source.id), ...telemetry });
+          if (telemetry.interrupted) break;
+        } catch (error) {
+          report.ingested.push({ sourceId: Number(source.id), error: error.message });
+        }
       }
+    });
+    if (!leased.acquired) {
+      report.resource = { ...ingestionPermit, allowed: false, reason: leased.reason };
     }
   }
 
@@ -119,23 +164,32 @@ export async function runCycle(catalog, config, governor = new ResourceGovernor(
   report.resource = analysisPermit;
   setPhase('analysis', analysisPermit.mode);
   if (analysisPermit.allowed) {
-    try {
-      report.analysis = await analyzer(catalog, config,
-        scopedGovernor(governor, RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS));
-    } catch (error) {
-      report.analysis = {
-        positions: 0,
-        moves: 0,
-        skipped: true,
-        recoverableError: String(error?.message ?? error).slice(0, 512),
-      };
-    }
+    const leased = await withHeavyLease(heavyLeaseFactory, async (lease) => {
+      try {
+        return await analyzer(
+          catalog,
+          config,
+          scopedGovernor(governor, RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS, lease),
+          { lease },
+        );
+      } catch (error) {
+        return {
+          positions: 0,
+          moves: 0,
+          skipped: true,
+          recoverableError: String(error?.message ?? error).slice(0, 512),
+        };
+      }
+    });
+    report.analysis = leased.acquired
+      ? leased.value
+      : { positions: 0, moves: 0, skipped: true, reason: leased.reason };
   } else {
     report.analysis = { positions: 0, moves: 0, skipped: true, reason: analysisPermit.reason };
   }
 
   if (config.channels.qualified && catalog.hasPublishableObservations({ includeFixtures: false })) {
-    const qualifiedPermit = await governor.permit(RESOURCE_WORK_CLASSES.INGESTION_AND_MAINTENANCE);
+    const qualifiedPermit = await governor.permit(RESOURCE_WORK_CLASSES.INTEGRATION_PUBLICATION);
     report.resource = qualifiedPermit;
     setPhase('publication', qualifiedPermit.mode);
     if (qualifiedPermit.allowed) {
@@ -153,8 +207,15 @@ export async function runCycle(catalog, config, governor = new ResourceGovernor(
   const maintenancePermit = await governor.permit(RESOURCE_WORK_CLASSES.INGESTION_AND_MAINTENANCE);
   report.resource = maintenancePermit;
   setPhase('maintenance', maintenancePermit.mode);
-  if (maintenancePermit.allowed) report.maintenance = await runMaintenance(catalog, config);
-  else report.maintenance = { skipped: true, reason: maintenancePermit.reason };
+  if (maintenancePermit.allowed) {
+    const leased = await withHeavyLease(
+      heavyLeaseFactory,
+      () => runMaintenance(catalog, config),
+    );
+    report.maintenance = leased.acquired
+      ? leased.value
+      : { skipped: true, reason: leased.reason };
+  } else report.maintenance = { skipped: true, reason: maintenancePermit.reason };
   return report;
 }
 

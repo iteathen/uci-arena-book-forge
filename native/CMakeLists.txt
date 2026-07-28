@@ -16,9 +16,14 @@ target_compile_definitions(book_forge_launcher PRIVATE WIN32_LEAN_AND_MEAN NOMIN
 target_link_libraries(book_forge_launcher PRIVATE Shell32)
 
 if(MSVC)
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION bin)
+    set(CMAKE_INSTALL_UCRT_LIBRARIES TRUE)
+    include(InstallRequiredSystemLibraries)
     target_compile_options(book_forge_guard PRIVATE /W4 /permissive- /EHsc)
     target_compile_options(book_forge_launcher PRIVATE /W4 /permissive- /EHsc)
 else()
     target_compile_options(book_forge_guard PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(book_forge_launcher PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+install(TARGETS book_forge_guard book_forge_launcher RUNTIME DESTINATION bin)

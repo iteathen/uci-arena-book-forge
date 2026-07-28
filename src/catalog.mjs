@@ -627,7 +627,10 @@ export class Catalog {
       .run(paused ? 1 : 0, reason, new Date().toISOString());
   }
 
-  control() { return this.database.prepare('SELECT * FROM control WHERE singleton=1').get(); }
+  control() {
+    const row = this.database.prepare('SELECT * FROM control WHERE singleton=1').get();
+    return { ...row, singleton: Boolean(row.singleton), paused: Boolean(row.paused) };
+  }
 
   status() {
     const sources = this.database.prepare('SELECT status,lifecycle,COUNT(*) AS count,SUM(games_accepted) AS games FROM sources GROUP BY status,lifecycle').all();

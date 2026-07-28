@@ -9,7 +9,12 @@ import { runDaemon } from './daemon.mjs';
 import { registerInput, sha256File } from './ingest.mjs';
 import { runMaintenance } from './maintenance.mjs';
 import { publishSnapshot } from './publisher.mjs';
-import { installWindowsStartup, queryWindowsStartup, readStartupEvidence, uninstallWindowsStartup } from './windows_startup.mjs';
+import {
+  installStartup,
+  queryStartup,
+  readStartupEvidence,
+  uninstallStartup,
+} from './platform_startup.mjs';
 
 function parseArguments(argv) {
   const positional = [];
@@ -102,11 +107,11 @@ async function main() {
     } else if (command === 'maintain') {
       output({ ok: true, maintenance: await runMaintenance(catalog, config, { force: true }) });
     } else if (command === 'startup' && subcommand === 'install') {
-      output({ ok: true, startup: await installWindowsStartup(config) });
+      output({ ok: true, startup: await installStartup(config) });
     } else if (command === 'startup' && subcommand === 'status') {
-      output({ ok: true, startup: await queryWindowsStartup(config), evidence: await readStartupEvidence(config) });
+      output({ ok: true, startup: await queryStartup(config), evidence: await readStartupEvidence(config) });
     } else if (command === 'startup' && subcommand === 'uninstall') {
-      output({ ok: true, startup: await uninstallWindowsStartup(config) });
+      output({ ok: true, startup: await uninstallStartup(config) });
     } else if (command === 'publish') {
       if (!subcommand) throw new Error('publish requires a snapshot directory');
       output({ ok: true, publication: await publishSnapshot(catalog, config, path.resolve(subcommand), options.channel ?? 'integration') });
