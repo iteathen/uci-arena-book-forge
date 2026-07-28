@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
+import { shutdownChildProcessTree } from '../../../arena/lib/gpu_resource_isolation.mjs';
 import { NativeResourceHelper } from './native_helper.mjs';
 
 const defaultRevocationPollMs = 250;
@@ -15,14 +16,24 @@ function revocationError(signal) {
   return error;
 }
 
-function monitorResourcePermit(governor, controller, onRevoked, intervalMs, activeProfile) {
+function monitorResourcePermit(
+  governor,
+  controller,
+  onRevoked,
+  intervalMs,
+  activeProfile,
+  lease = null,
+) {
   let sampling = false;
   let stopped = false;
   const sample = async () => {
     if (stopped || sampling || controller.signal.aborted) return;
     sampling = true;
     try {
-      const permit = await governor.permit();
+      const leaseRevocation = lease?.revocationReason();
+      const permit = leaseRevocation
+        ? { allowed: false, mode: 'preempt', reason: leaseRevocation }
+        : await governor.permit();
       const allocationReduced = permit.allowed && Number(permit.workerLimit) < activeProfile.workerCount;
       const needsReprofile = permit.allowed && permit.mode !== activeProfile.mode;
       if (!stopped && (!permit.allowed || allocationReduced || needsReprofile)) {
@@ -188,7 +199,7 @@ export class StockfishWorker {
     const abort = () => {
       const error = revocationError(signal);
       this.failWaiters(error);
-      try { this.child?.kill(); } catch {}
+      this.abort(error.message).catch(() => {});
     };
     if (signal?.aborted) throw revocationError(signal);
     signal?.addEventListener('abort', abort, { once: true });
@@ -240,6 +251,17 @@ export class StockfishWorker {
     } finally {
       this.child = null;
     }
+  }
+
+  async abort(reason = 'shared heavy background lease revoked') {
+    if (!this.child || this.child.exitCode !== null || this.child.signalCode !== null) return;
+    this.failWaiters(Object.assign(new Error(reason), { code: 'BOOK_FORGE_PREEMPTED' }));
+    await shutdownChildProcessTree(this.child, {
+      label: 'Book Forge Stockfish',
+      gracefulTimeoutMs: 100,
+      forceTimeoutMs: 500,
+      ultimateTimeoutMs: 1_500,
+    });
   }
 }
 
@@ -309,6 +331,7 @@ async function analyzeGroup(catalog, config, worker, records, signal) {
 export async function analyzeObservations(catalog, config, governor, {
   workerFactory = (workerConfig) => new StockfishWorker(workerConfig),
   revocationPollMs = defaultRevocationPollMs,
+  lease = null,
 } = {}) {
   const observations = catalog.aggregateObservations({ includeFixtures: false });
   if (!observations.length || !config.analysis.enabled || !config.stockfishAvailable) return { positions: 0, moves: 0, skipped: true };
@@ -369,7 +392,7 @@ export async function analyzeObservations(catalog, config, governor, {
       let revokedPermit = null;
       const stopMonitoring = monitorResourcePermit(governor, controller,
         (revoked) => { revokedPermit = revoked; }, revocationPollMs,
-        { mode: permit.mode, workerCount: workers.length });
+        { mode: permit.mode, workerCount: workers.length }, lease);
       const tasks = batch.map((records, workerIndex) => analyzeGroup(
         catalog, config, workers[workerIndex], records, controller.signal));
       let results;

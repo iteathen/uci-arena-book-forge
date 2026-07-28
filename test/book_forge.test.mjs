@@ -785,6 +785,7 @@ test('shared lease contention defers Book Forge heavy phases while courtesy work
     () => {},
     1,
     false,
+    analyzeObservations,
     async () => {
       leaseAttempts += 1;
       return null;
