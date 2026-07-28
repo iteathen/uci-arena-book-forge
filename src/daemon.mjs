@@ -63,7 +63,7 @@ function acquisitionBootstrapReady(catalog, config) {
 
 export async function runCycle(catalog, config, governor = new ResourceGovernor(config, catalog),
     acquisition = new ExplorerAcquisition(catalog, config), setPhase = () => {}, acquisitionMaxRequests = undefined,
-    acquisitionOnly = false) {
+    acquisitionOnly = false, analyzer = analyzeObservations) {
   const acquisitionPermit = await governor.permit(RESOURCE_WORK_CLASSES.ACQUISITION);
   const report = { acquisition: null, discovered: [], ingested: [], integration: null, analysis: null, qualified: null, maintenance: null, resource: acquisitionPermit };
   if (!acquisitionPermit.allowed) {
@@ -119,8 +119,17 @@ export async function runCycle(catalog, config, governor = new ResourceGovernor(
   report.resource = analysisPermit;
   setPhase('analysis', analysisPermit.mode);
   if (analysisPermit.allowed) {
-    report.analysis = await analyzeObservations(catalog, config,
-      scopedGovernor(governor, RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS));
+    try {
+      report.analysis = await analyzer(catalog, config,
+        scopedGovernor(governor, RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS));
+    } catch (error) {
+      report.analysis = {
+        positions: 0,
+        moves: 0,
+        skipped: true,
+        recoverableError: String(error?.message ?? error).slice(0, 512),
+      };
+    }
   } else {
     report.analysis = { positions: 0, moves: 0, skipped: true, reason: analysisPermit.reason };
   }
@@ -149,36 +158,93 @@ export async function runCycle(catalog, config, governor = new ResourceGovernor(
   return report;
 }
 
-export async function runDaemon(catalog, config, { once = false, acquisitionMaxRequests = undefined, acquisitionOnly = false } = {}) {
+export async function runDaemon(catalog, config, {
+  once = false,
+  acquisitionMaxRequests = undefined,
+  acquisitionOnly = false,
+  cycleRunner = runCycle,
+  delayImpl = delay,
+  maximumCycleAttempts = Number.POSITIVE_INFINITY,
+} = {}) {
   if (acquisitionOnly && !once) throw new Error('Acquisition-only execution must be one shot');
+  if (!once && (!Number.isInteger(maximumCycleAttempts) || maximumCycleAttempts < 1) &&
+      maximumCycleAttempts !== Number.POSITIVE_INFINITY) {
+    throw new TypeError('maximumCycleAttempts must be a positive integer or Infinity');
+  }
   const releaseLock = await acquireLock(config);
   const startedAt = new Date().toISOString();
   const heartbeat = async () => {
     const now = new Date().toISOString();
-    catalog.updateDaemonState({ pid: process.pid, started_at: startedAt, heartbeat_at: now });
+    let catalogError = null;
+    try { catalog.updateDaemonState({ pid: process.pid, started_at: startedAt, heartbeat_at: now }); }
+    catch (error) { catalogError = error; }
     await writeFile(config.daemonHeartbeatFile, `${JSON.stringify({ pid: process.pid, heartbeatAt: now })}\n`, 'utf8');
+    if (catalogError) throw catalogError;
   };
   await heartbeat();
   const heartbeatTimer = setInterval(() => { heartbeat().catch(() => {}); }, 15_000);
   const setPhase = (phase, resourceMode = '') => catalog.updateDaemonState({ phase, resource_mode: resourceMode, heartbeat_at: new Date().toISOString() });
-  const governor = new ResourceGovernor(config, catalog);
-  const acquisition = new ExplorerAcquisition(catalog, config);
+  let governor = null;
+  let completedNormally = false;
   try {
+    governor = new ResourceGovernor(config, catalog);
+    const acquisition = new ExplorerAcquisition(catalog, config);
     let lastReport = null;
+    let attempts = 0;
+    let consecutiveFailures = 0;
     do {
-      catalog.updateDaemonState({ cycle_started_at: new Date().toISOString(), last_error: '' });
-      lastReport = await runCycle(catalog, config, governor, acquisition, setPhase, acquisitionMaxRequests, acquisitionOnly);
-      catalog.updateDaemonState({ cycle_completed_at: new Date().toISOString(), last_report: lastReport });
-      if (!once) { setPhase('sleep', governor.last.mode); await delay(60_000); }
-    } while (!once);
+      attempts += 1;
+      try {
+        catalog.updateDaemonState({ cycle_started_at: new Date().toISOString() });
+        lastReport = await cycleRunner(
+          catalog, config, governor, acquisition, setPhase, acquisitionMaxRequests, acquisitionOnly);
+        consecutiveFailures = 0;
+        catalog.updateDaemonState({
+          cycle_completed_at: new Date().toISOString(), last_report: lastReport, last_error: '',
+        });
+      } catch (error) {
+        const boundedError = String(error?.message ?? error).slice(0, 2_048);
+        if (once || attempts >= maximumCycleAttempts) {
+          catalog.updateDaemonState({ phase: 'failed', heartbeat_at: new Date().toISOString(), last_error: boundedError });
+          throw error;
+        }
+        consecutiveFailures += 1;
+        const retryDelayMs = Math.min(config.daemon.failureBackoffMaximumMs,
+          config.daemon.failureBackoffInitialMs * (2 ** Math.min(30, consecutiveFailures - 1)));
+        const nextRetryAt = new Date(Date.now() + retryDelayMs).toISOString();
+        try {
+          catalog.updateDaemonState({
+            phase: 'recovering', resource_mode: governor.last.mode,
+            heartbeat_at: new Date().toISOString(), last_error: boundedError,
+            last_report: {
+              recovery: { consecutiveFailures, retryDelayMs, nextRetryAt, error: boundedError },
+            },
+          });
+        } catch {}
+        await delayImpl(retryDelayMs);
+        continue;
+      }
+      if (!once && attempts < maximumCycleAttempts) {
+        try { setPhase('sleep', governor.last.mode); } catch {}
+        await delayImpl(config.daemon.cycleIntervalMs);
+      }
+    } while (!once && attempts < maximumCycleAttempts);
+    completedNormally = true;
     return lastReport;
   } catch (error) {
-    catalog.updateDaemonState({ phase: 'failed', heartbeat_at: new Date().toISOString(), last_error: error.message });
+    try {
+      catalog.updateDaemonState({
+        phase: 'failed', heartbeat_at: new Date().toISOString(),
+        last_error: String(error?.message ?? error).slice(0, 2_048),
+      });
+    } catch {}
     throw error;
   } finally {
     clearInterval(heartbeatTimer);
-    governor.close();
-    if (once) catalog.updateDaemonState({ phase: 'stopped', heartbeat_at: new Date().toISOString() });
+    governor?.close();
+    if (completedNormally) {
+      catalog.updateDaemonState({ phase: 'stopped', heartbeat_at: new Date().toISOString() });
+    }
     await releaseLock();
   }
 }

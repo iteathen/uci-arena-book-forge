@@ -1,6 +1,8 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -8,6 +10,9 @@
 namespace {
 
 constexpr DWORD launcher_error = 70;
+constexpr DWORD initial_restart_delay_ms = 5'000;
+constexpr DWORD maximum_restart_delay_ms = 300'000;
+constexpr std::uint64_t healthy_runtime_ms = 300'000;
 
 std::vector<std::wstring> command_line_arguments() {
     int count = 0;
@@ -43,9 +48,9 @@ std::wstring quote_argument(std::wstring_view value) {
     return quoted;
 }
 
-std::wstring child_command_line(const std::vector<std::wstring>& arguments) {
+std::wstring child_command_line(const std::vector<std::wstring>& arguments, std::size_t executable_index) {
     std::wstring command_line;
-    for (std::size_t index = 1; index < arguments.size(); ++index) {
+    for (std::size_t index = executable_index; index < arguments.size(); ++index) {
         if (!command_line.empty()) command_line.push_back(L' ');
         command_line.append(quote_argument(arguments[index]));
     }
@@ -55,7 +60,9 @@ std::wstring child_command_line(const std::vector<std::wstring>& arguments) {
 void write_probe() {
     constexpr std::string_view message =
         "{\"schema\":\"flashfork_book_forge_launcher_probe_v1\","
-        "\"windows_gui_subsystem\":true,\"create_no_window\":true}\n";
+        "\"windows_gui_subsystem\":true,\"create_no_window\":true,"
+        "\"persistent_restart\":true,\"initial_restart_delay_ms\":5000,"
+        "\"maximum_restart_delay_ms\":300000}\n";
     const auto output = GetStdHandle(STD_OUTPUT_HANDLE);
     if (output == nullptr || output == INVALID_HANDLE_VALUE) return;
     DWORD written = 0;
@@ -67,8 +74,15 @@ HANDLE open_null(DWORD access, SECURITY_ATTRIBUTES* security) {
         FILE_ATTRIBUTE_NORMAL, nullptr);
 }
 
-int launch_hidden(const std::vector<std::wstring>& arguments) {
-    if (arguments.size() < 3 || arguments[1].empty()) return ERROR_INVALID_PARAMETER;
+struct LaunchResult {
+    int exit_code = launcher_error;
+    std::uint64_t runtime_ms = 0;
+};
+
+LaunchResult launch_hidden(const std::vector<std::wstring>& arguments, std::size_t executable_index) {
+    if (arguments.size() <= executable_index || arguments[executable_index].empty()) {
+        return {ERROR_INVALID_PARAMETER, 0};
+    }
 
     SECURITY_ATTRIBUTES security{};
     security.nLength = sizeof(security);
@@ -78,7 +92,7 @@ int launch_hidden(const std::vector<std::wstring>& arguments) {
     if (null_input == INVALID_HANDLE_VALUE || null_output == INVALID_HANDLE_VALUE) {
         if (null_input != INVALID_HANDLE_VALUE) CloseHandle(null_input);
         if (null_output != INVALID_HANDLE_VALUE) CloseHandle(null_output);
-        return launcher_error;
+        return {launcher_error, 0};
     }
 
     STARTUPINFOW startup{};
@@ -90,16 +104,19 @@ int launch_hidden(const std::vector<std::wstring>& arguments) {
     startup.hStdError = null_output;
 
     PROCESS_INFORMATION process{};
-    auto command_line = child_command_line(arguments);
+    auto command_line = child_command_line(arguments, executable_index);
+    const auto started_at = GetTickCount64();
     const auto created = CreateProcessW(
-        arguments[1].c_str(), command_line.data(), nullptr, nullptr, TRUE,
+        arguments[executable_index].c_str(), command_line.data(), nullptr, nullptr, TRUE,
         CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
         nullptr, nullptr, &startup, &process
     );
     const auto create_error = created == FALSE ? GetLastError() : ERROR_SUCCESS;
     CloseHandle(null_input);
     CloseHandle(null_output);
-    if (created == FALSE) return create_error == ERROR_SUCCESS ? launcher_error : static_cast<int>(create_error);
+    if (created == FALSE) {
+        return {static_cast<int>(create_error == ERROR_SUCCESS ? launcher_error : create_error), 0};
+    }
 
     const auto job = CreateJobObjectW(nullptr, nullptr);
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
@@ -112,7 +129,7 @@ int launch_hidden(const std::vector<std::wstring>& arguments) {
         CloseHandle(process.hThread);
         CloseHandle(process.hProcess);
         if (job != nullptr) CloseHandle(job);
-        return launcher_error;
+        return {launcher_error, GetTickCount64() - started_at};
     }
     CloseHandle(process.hThread);
 
@@ -124,7 +141,17 @@ int launch_hidden(const std::vector<std::wstring>& arguments) {
     }
     CloseHandle(process.hProcess);
     CloseHandle(job);
-    return static_cast<int>(exit_code);
+    return {static_cast<int>(exit_code), GetTickCount64() - started_at};
+}
+
+int supervise_hidden(const std::vector<std::wstring>& arguments) {
+    DWORD restart_delay_ms = initial_restart_delay_ms;
+    for (;;) {
+        const auto result = launch_hidden(arguments, 2);
+        if (result.runtime_ms >= healthy_runtime_ms) restart_delay_ms = initial_restart_delay_ms;
+        Sleep(restart_delay_ms);
+        restart_delay_ms = std::min(maximum_restart_delay_ms, restart_delay_ms * 2);
+    }
 }
 
 }  // namespace
@@ -136,5 +163,6 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         write_probe();
         return 0;
     }
-    return launch_hidden(arguments);
+    if (arguments.size() >= 4 && arguments[1] == L"--restart") return supervise_hidden(arguments);
+    return launch_hidden(arguments, 1).exit_code;
 }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,7 +17,7 @@ import { runMaintenance } from '../src/maintenance.mjs';
 import { NativeResourceHelper } from '../src/native_helper.mjs';
 import { publishSnapshot } from '../src/publisher.mjs';
 import { RESOURCE_WORK_CLASSES, ResourceGovernor } from '../src/resource_governor.mjs';
-import { StockfishWorker } from '../src/stockfish.mjs';
+import { analyzeObservations, StockfishWorker } from '../src/stockfish.mjs';
 import { buildTaskXml, installWindowsStartup, quoteWindowsArgument, startupAction, startupTaskName } from '../src/windows_startup.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -85,7 +85,7 @@ test('Windows startup task uses a windowless native launcher with absolute paths
   assert.equal(path.isAbsolute(action.command), true);
   assert.equal(path.isAbsolute(action.workingDirectory), true);
   assert.equal(action.command, config.nativeLauncher);
-  assert.ok(action.arguments.startsWith(quoteWindowsArgument(path.resolve(process.execPath))));
+  assert.ok(action.arguments.startsWith(`--restart ${quoteWindowsArgument(path.resolve(process.execPath))}`));
   assert.match(action.arguments, / daemon --workspace /);
   assert.doesNotMatch(action.arguments, /--detach/);
   assert.equal(quoteWindowsArgument('C:\\plain'), 'C:\\plain');
@@ -139,6 +139,10 @@ test('configuration copies defaults and forbids redirecting the credential heade
   first.acquisition.resourcePollMs = 10;
   const second = await loadConfig({ workspace: first.workspace });
   assert.equal(second.acquisition.resourcePollMs, 1_000);
+  assert.deepEqual(second.resources.priorityProcessNames.slice(0, 2), [
+    'flashfork_uci.exe',
+    'uci_arena.exe',
+  ]);
   const filename = path.join(first.workspace, 'unsafe.config.json');
   await writeFile(filename, JSON.stringify({
     schema: 'flashfork_book_forge_config_v1', acquisition: { endpoint: 'https://example.com/lichess' },
@@ -334,6 +338,88 @@ test('one-shot daemon persists a heartbeat and a single bounded cycle report', a
   assert.equal(heartbeat.pid, process.pid);
 });
 
+test('continuous daemon retries a failed cycle in-process with bounded exponential backoff', async (t) => {
+  const config = await workspace(t);
+  config.acquisition.enabled = false;
+  config.channels.integration = false;
+  config.channels.qualified = false;
+  config.nativeHelperAvailable = false;
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  let calls = 0;
+  const delays = [];
+  let recoveringState = null;
+  const recoveredReport = { recovered: true };
+  const report = await runDaemon(catalog, config, {
+    maximumCycleAttempts: 2,
+    delayImpl: async (milliseconds) => {
+      delays.push(milliseconds);
+      recoveringState = catalog.daemonState();
+    },
+    cycleRunner: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('temporary cycle failure');
+      return recoveredReport;
+    },
+  });
+  const state = catalog.daemonState();
+  assert.deepEqual(report, recoveredReport);
+  assert.equal(calls, 2);
+  assert.deepEqual(delays, [config.daemon.failureBackoffInitialMs]);
+  assert.equal(recoveringState.phase, 'recovering');
+  assert.equal(recoveringState.lastReport.recovery.consecutiveFailures, 1);
+  assert.equal(recoveringState.lastReport.recovery.retryDelayMs, config.daemon.failureBackoffInitialMs);
+  assert.match(recoveringState.lastError, /temporary cycle failure/);
+  assert.equal(state.phase, 'stopped');
+  assert.equal(state.lastError, '');
+  assert.deepEqual(state.lastReport, recoveredReport);
+});
+
+test('one-shot daemon remains fail-fast and leaves a visible failed state', async (t) => {
+  const config = await workspace(t);
+  config.nativeHelperAvailable = false;
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  await assert.rejects(runDaemon(catalog, config, {
+    once: true,
+    cycleRunner: async () => { throw new Error('one-shot failure'); },
+  }), /one-shot failure/);
+  const state = catalog.daemonState();
+  assert.equal(state.phase, 'failed');
+  assert.match(state.lastError, /one-shot failure/);
+});
+
+test('a transient Stockfish failure is isolated to analysis and the cycle completes maintenance', async (t) => {
+  const config = await workspace(t);
+  config.acquisition.enabled = false;
+  config.channels.integration = false;
+  config.channels.qualified = false;
+  config.nativeHelperAvailable = false;
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const governor = mockedResourceGovernor(config, catalog);
+  t.after(() => governor.close());
+  const phases = [];
+  const acquisition = new ExplorerAcquisition(catalog, config);
+  const report = await runCycle(
+    catalog,
+    config,
+    governor,
+    acquisition,
+    (phase) => phases.push(phase),
+    undefined,
+    false,
+    async () => { throw new Error('Timed out waiting for Stockfish after 30000 ms'); },
+  );
+
+  assert.equal(report.analysis.positions, 0);
+  assert.equal(report.analysis.moves, 0);
+  assert.equal(report.analysis.skipped, true);
+  assert.match(report.analysis.recoverableError, /Timed out waiting for Stockfish/);
+  assert.equal(report.maintenance.skipped, false);
+  assert.ok(phases.includes('maintenance'));
+});
+
 test('acquisition-only execution stays isolated from ingestion, analysis, and publication', async (t) => {
   const config = await workspace(t);
   config.acquisition.enabled = false;
@@ -499,12 +585,13 @@ test('qualified channel promotes automatically after current eval and external g
   assert.equal(publication.snapshotId, qualified.id);
 });
 
-test('resource governor keeps lightweight work in courtesy mode while the engine is running', async (t) => {
+test('resource governor permits bounded background-sip analysis while the engine is running', async (t) => {
   const config = await workspace(t);
   config.resources.priorityProcessNames = ['msbuild.exe', 'cl.exe'];
+  config.nativeHelperAvailable = true;
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
-  const governor = mockedResourceGovernor(config, catalog, { runningProcesses: ['flashfork_uci.exe'] });
+  const governor = mockedResourceGovernor(config, catalog, { runningProcesses: ['uci_arena.exe'] });
   t.after(() => governor.close());
 
   await assert.rejects(governor.permit(), /Unknown Book Forge resource work class/);
@@ -516,15 +603,99 @@ test('resource governor keeps lightweight work in courtesy mode while the engine
     assert.equal(permit.engineProcessRunning, true);
     assert.equal(permit.hardStop, false);
   }
-  for (const workClass of [RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS, RESOURCE_WORK_CLASSES.INGESTION_AND_MAINTENANCE]) {
-    const permit = await governor.permit(workClass);
-    assert.equal(permit.workClass, workClass);
-    assert.equal(permit.allowed, false);
-    assert.equal(permit.mode, 'backoff');
-    assert.equal(permit.engineProcessRunning, true);
-    assert.equal(permit.hardStop, false);
-    assert.match(permit.reason, /flashfork_uci\.exe is running/);
-  }
+  const analysis = await governor.permit(RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS);
+  assert.equal(analysis.allowed, true);
+  assert.equal(analysis.mode, 'background_sip');
+  assert.equal(analysis.workerLimit, 2);
+  assert.equal(analysis.dutyCyclePercent, 50);
+  assert.equal(analysis.efficiencyCoreLimit, 2);
+  assert.match(analysis.reason, /foreground UCI engine is running \(uci_arena\.exe\)/);
+  config.nativeHelperAvailable = false;
+  const portableFallback = await governor.permit(RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS);
+  assert.equal(portableFallback.mode, 'background_sip');
+  assert.equal(portableFallback.workerLimit, 1);
+  const maintenance = await governor.permit(RESOURCE_WORK_CLASSES.INGESTION_AND_MAINTENANCE);
+  assert.equal(maintenance.allowed, false);
+  assert.equal(maintenance.mode, 'backoff');
+  assert.equal(maintenance.engineProcessRunning, true);
+  assert.equal(maintenance.hardStop, false);
+});
+
+test('resource governor bounds expensive operating-system safety probes', async (t) => {
+  const config = await workspace(t);
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  let clock = 1_000;
+  let idle = 0;
+  let total = 0;
+  let nativeProbes = 0;
+  let processProbes = 0;
+  const governor = new ResourceGovernor(config, catalog, {
+    now: () => clock,
+    cpuTotalsImpl: () => ({ idle: idle += 50, total: total += 100 }),
+    statfsImpl: async () => ({ bavail: 1_024_000n, bsize: 1_048_576n }),
+    freeMemoryImpl: () => 64 * 1024 ** 3,
+    processProbe: async () => { processProbes += 1; return []; },
+    nativeHelper: {
+      start() {}, close() {},
+      async probe() {
+        nativeProbes += 1;
+        return { on_battery: false, battery_saver: false, input_idle_ms: 0, processor_limit_percent: 100 };
+      },
+    },
+  });
+  t.after(() => governor.close());
+  await governor.permit(RESOURCE_WORK_CLASSES.ACQUISITION);
+  await governor.permit(RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS);
+  assert.equal(nativeProbes, 1);
+  assert.equal(processProbes, 1);
+  clock += 501;
+  await governor.permit(RESOURCE_WORK_CLASSES.ACQUISITION);
+  assert.equal(nativeProbes, 2);
+  assert.equal(processProbes, 2);
+});
+
+test('Stockfish analysis is interrupted promptly when a foreground engine appears', async () => {
+  const record = { fingerprint: Buffer.alloc(16), fen: '8/8/8/8/8/8/4K3/6k1 w - - 0 1', uciMove: 'e2e3' };
+  const catalog = {
+    aggregateObservations: () => [record],
+    evaluation: () => null,
+    setMetadata: () => {},
+  };
+  const config = {
+    stockfishAvailable: true,
+    analysis: {
+      enabled: true, initialNodes: 1_000, confirmationNodes: 2_000, maximumWorkers: 1,
+      backgroundSipEfficiencyCores: 2, backgroundSipDutyCyclePercent: 50,
+    },
+    nativeHelperAvailable: false,
+  };
+  let permitCalls = 0;
+  const governor = { permit: async () => {
+    permitCalls += 1;
+    if (permitCalls <= 2) return { allowed: true, workerLimit: 1, mode: 'idle_harvest', dutyCyclePercent: 100 };
+    return {
+      allowed: true, workerLimit: 1, mode: 'background_sip', dutyCyclePercent: 50,
+      reason: 'foreground UCI engine is running (uci_arena.exe)',
+    };
+  } };
+  let closed = false;
+  const worker = {
+    fingerprint: 'test-stockfish',
+    start: async ({ resourceMode }) => { worker.resourceMode = resourceMode; },
+    analyze: async (_fen, _moves, _nodes, { signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('analysis aborted')), { once: true });
+    }),
+    close: async () => { closed = true; },
+  };
+  const started = performance.now();
+  const report = await analyzeObservations(catalog, config, governor,
+    { workerFactory: () => worker, revocationPollMs: 10 });
+  assert.equal(report.interrupted, true);
+  assert.equal(report.skipped, false);
+  assert.match(report.reason, /uci_arena\.exe/);
+  assert.ok(performance.now() - started < 1_000);
+  assert.equal(closed, true);
 });
 
 test('every hard resource stop rejects every work class', async (t) => {
@@ -560,7 +731,7 @@ test('every hard resource stop rejects every work class', async (t) => {
   catalog.setPaused(false, '');
 });
 
-test('daemon advances acquisition and integration publication while deferring heavy work to a running engine', async (t) => {
+test('daemon advances acquisition, integration publication, and bounded analysis with a running engine', async (t) => {
   const config = await workspace(t);
   config.resources.priorityProcessNames = ['flashfork_uci.exe', 'msbuild.exe', 'cl.exe'];
   config.channels.qualified = false;
@@ -581,15 +752,16 @@ test('daemon advances acquisition and integration publication while deferring he
   };
 
   const report = await runCycle(catalog, config, governor, acquisition,
-    (phase, mode) => phases.push({ phase, mode }), 1);
+    (phase, mode) => phases.push({ phase, mode }), 1, false,
+    async () => ({ positions: 1, moves: 2, skipped: false, resourceMode: 'background_sip' }));
   assert.equal(report.acquisition.requests, 1);
   assert.ok(report.integration?.snapshotId);
-  assert.equal(report.analysis.skipped, true);
-  assert.match(report.analysis.reason, /flashfork_uci\.exe is running/);
+  assert.equal(report.analysis.positions, 1);
+  assert.equal(report.analysis.resourceMode, 'background_sip');
   assert.equal(report.maintenance.skipped, true);
-  assert.match(report.maintenance.reason, /flashfork_uci\.exe is running/);
+  assert.match(report.maintenance.reason, /foreground UCI engine is running \(flashfork_uci\.exe\)/);
   assert.ok(phases.some(({ phase, mode }) => phase === 'publication' && mode === 'courtesy'));
-  assert.ok(phases.some(({ phase, mode }) => phase === 'analysis' && mode === 'backoff'));
+  assert.ok(phases.some(({ phase, mode }) => phase === 'analysis' && mode === 'background_sip'));
 });
 
 test('resource governor enters backoff before starting work under disk pressure', async (t) => {
@@ -662,6 +834,81 @@ test('optional Windows guard exposes battery, input-idle, and processor-limit te
   assert.ok(probe.processor_limit_percent >= 0 && probe.processor_limit_percent <= 100);
 });
 
+test('background-sip analysis uses two proven workers and an interruptible work-rest duty cycle', async () => {
+  const observations = [0, 1].map((value) => ({
+    fingerprint: Buffer.alloc(16, value),
+    fen: value === 0 ? '8/8/8/8/8/8/4K3/6k1 w - - 0 1' : '8/8/8/8/8/5K2/8/6k1 w - - 0 1',
+    uciMove: value === 0 ? 'e2e3' : 'f3f4',
+  }));
+  const catalog = {
+    aggregateObservations: () => observations,
+    evaluation: () => null,
+    putEvaluation: () => {},
+    setMetadata: () => {},
+  };
+  const config = {
+    stockfishAvailable: true,
+    nativeHelperAvailable: true,
+    analysis: {
+      enabled: true, initialNodes: 1_000, confirmationNodes: 2_000, maximumWorkers: 2,
+      backgroundSipEfficiencyCores: 2, backgroundSipDutyCyclePercent: 50,
+    },
+  };
+  const governor = { permit: async () => ({
+    allowed: true, workerLimit: 2, mode: 'background_sip', dutyCyclePercent: 50,
+  }) };
+  let workerCount = 0;
+  const workerFactory = () => {
+    workerCount += 1;
+    return {
+      fingerprint: 'test-stockfish', resourceMode: null, resourceProfile: null,
+      async start({ resourceMode }) {
+        this.resourceMode = resourceMode;
+        this.resourceProfile = {
+          cpu_set_applied: true, selected_cpu_sets: 2, idle_priority: true, eco_qos: true,
+        };
+      },
+      async analyze(_fen, moves) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return new Map(moves.map((move) => [move, {
+          scoreCp: 0, mate: null, wdl: '0 1000 0', depth: 1, pv: move, multipv: 1,
+        }]));
+      },
+      async close() {},
+    };
+  };
+  const started = performance.now();
+  const report = await analyzeObservations(catalog, config, governor, { workerFactory });
+  assert.equal(workerCount, 2);
+  assert.equal(report.workersUsed, 2);
+  assert.equal(report.positions, 2);
+  assert.equal(report.resourceMode, 'background_sip');
+  assert.ok(performance.now() - started >= 35);
+});
+
+test('optional Windows guard applies EcoQoS and uses only proven efficiency CPU sets', async (t) => {
+  const config = await workspace(t);
+  t.after(() => rm(config.workspace, { recursive: true, force: true }));
+  if (!config.nativeHelperAvailable) return t.skip('native resource guard is not built');
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], {
+    stdio: 'ignore', windowsHide: true,
+  });
+  t.after(() => { try { child.kill(); } catch {} });
+  const profile = await new NativeResourceHelper(config).applyProcessProfile(child.pid, { efficiencyCoreLimit: 2 });
+  assert.equal(profile.schema, 'flashfork_book_forge_process_profile_v1');
+  assert.equal(profile.applied, true);
+  assert.equal(profile.idle_priority, true);
+  assert.equal(typeof profile.eco_qos, 'boolean');
+  assert.ok(profile.selected_cpu_sets >= 0 && profile.selected_cpu_sets <= 2);
+  if (profile.heterogeneous) {
+    assert.equal(profile.cpu_set_applied, true);
+    assert.ok(profile.selected_cpu_sets >= 1);
+    assert.ok(profile.minimum_efficiency_class < profile.maximum_efficiency_class);
+  } else {
+    assert.equal(profile.cpu_set_applied, false);
+  }
+});
+
 test('native launcher is a GUI process that runs Node without a console and propagates its exit code', async (t) => {
   const config = await workspace(t);
   t.after(() => rm(config.workspace, { recursive: true, force: true }));
@@ -675,6 +922,7 @@ test('native launcher is a GUI process that runs Node without a console and prop
   const { stdout } = await execFileAsync(config.nativeLauncher, ['--probe'], { windowsHide: true, timeout: 5_000 });
   assert.deepEqual(JSON.parse(stdout), {
     schema: 'flashfork_book_forge_launcher_probe_v1', windows_gui_subsystem: true, create_no_window: true,
+    persistent_restart: true, initial_restart_delay_ms: 5_000, maximum_restart_delay_ms: 300_000,
   });
 
   const fixture = path.join(config.workspace, 'launcher fixture.mjs');
@@ -684,4 +932,35 @@ test('native launcher is a GUI process that runs Node without a console and prop
     [process.execPath, fixture, marker, 'windowless child completed', '23'], { windowsHide: true, timeout: 10_000 }),
   (error) => error.code === 23);
   assert.equal(await readFile(marker, 'utf8'), 'windowless child completed');
+});
+
+test('native launcher restarts a failed continuous daemon without Task Scheduler intervention', async (t) => {
+  const config = await workspace(t);
+  t.after(() => rm(config.workspace, { recursive: true, force: true }));
+  if (!config.nativeLauncherAvailable) return t.skip('native windowless launcher is not built');
+
+  const fixture = path.join(config.workspace, 'restart fixture.mjs');
+  const marker = path.join(config.workspace, 'restart attempts.txt');
+  await writeFile(fixture, `
+import { readFile, writeFile } from 'node:fs/promises';
+let attempts = 0;
+try { attempts = Number(await readFile(process.argv[2], 'utf8')); } catch {}
+attempts += 1;
+await writeFile(process.argv[2], String(attempts));
+if (attempts === 1) process.exit(23);
+setInterval(() => {}, 1000);
+`, 'utf8');
+  const launcher = spawn(config.nativeLauncher, ['--restart', process.execPath, fixture, marker], {
+    stdio: 'ignore', windowsHide: true,
+  });
+  t.after(() => { try { launcher.kill(); } catch {} });
+  const deadline = Date.now() + 12_000;
+  let attempts = 0;
+  while (Date.now() < deadline) {
+    try { attempts = Number(await readFile(marker, 'utf8')); } catch {}
+    if (attempts >= 2) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.equal(attempts, 2);
+  assert.equal(launcher.exitCode, null);
 });

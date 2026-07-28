@@ -6,7 +6,7 @@ import { NativeResourceHelper } from './native_helper.mjs';
 
 const execFileAsync = promisify(execFile);
 const gibibyte = 1024 ** 3;
-const engineProcessNames = new Set(['flashfork_uci.exe']);
+const engineProcessNames = new Set(['flashfork_uci.exe', 'uci_arena.exe']);
 
 export const RESOURCE_WORK_CLASSES = Object.freeze({
   ACQUISITION: 'acquisition',
@@ -56,6 +56,7 @@ export class ResourceGovernor {
     processProbe = runningConfiguredProcesses,
     nativeHelper = new NativeResourceHelper(config),
     now = () => Date.now(),
+    operatingSystemProbeCacheMs = 500,
   } = {}) {
     this.config = config;
     this.catalog = catalog;
@@ -64,6 +65,8 @@ export class ResourceGovernor {
     this.freeMemory = freeMemoryImpl;
     this.processProbe = processProbe;
     this.now = now;
+    this.operatingSystemProbeCacheMs = operatingSystemProbeCacheMs;
+    this.operatingSystemProbeCache = null;
     this.previousCpu = this.cpuTotals();
     this.idleSamples = 0;
     this.workerLimit = 1;
@@ -72,6 +75,22 @@ export class ResourceGovernor {
     this.native.start?.();
     this.last = { workClass: null, mode: 'courtesy', allowed: false, reason: 'resource permit not sampled', workerLimit: 1 };
     try { os.setPriority(process.pid, os.constants.priority.PRIORITY_LOW); } catch {}
+  }
+
+  async operatingSystemSnapshot(processNames) {
+    const sampledAt = this.now();
+    const key = processNames.join('\0');
+    if (this.operatingSystemProbeCache?.key === key &&
+        sampledAt - this.operatingSystemProbeCache.sampledAt < this.operatingSystemProbeCacheMs) {
+      return this.operatingSystemProbeCache.value;
+    }
+    const [native, runningProcesses] = await Promise.all([
+      this.native.probe(),
+      this.processProbe(processNames),
+    ]);
+    const value = { native, runningProcesses };
+    this.operatingSystemProbeCache = { key, sampledAt, value };
+    return value;
   }
 
   async sample(workClass) {
@@ -84,8 +103,13 @@ export class ResourceGovernor {
     const disk = await this.statfs(this.config.workspace, { bigint: true });
     const freeWorkspaceGb = Number(disk.bavail * disk.bsize) / gibibyte;
     const availableMemoryGb = this.freeMemory() / gibibyte;
-    const native = await this.native.probe();
     const control = this.catalog.control();
+    const processNames = [...new Set([
+      ...this.config.resources.priorityProcessNames,
+      ...engineProcessNames,
+    ])];
+    let native = null;
+    let runningProcesses = [];
     let mode = 'courtesy';
     let allowed = true;
     let reason = '';
@@ -98,43 +122,48 @@ export class ResourceGovernor {
       mode = 'backoff'; allowed = false; hardStop = true; reason = `workspace free space ${freeWorkspaceGb.toFixed(1)} GiB`;
     } else if (availableMemoryGb < this.config.resources.pauseAvailableMemoryGb) {
       mode = 'backoff'; allowed = false; hardStop = true; reason = `available memory ${availableMemoryGb.toFixed(1)} GiB`;
-    } else if (native?.on_battery || native?.battery_saver) {
-      mode = 'backoff'; allowed = false; hardStop = true;
-      reason = native.battery_saver ? 'Windows battery saver is active' : 'system is running on battery';
-    } else if (Number(native?.processor_limit_percent) < 60 && idleRatio < 0.50) {
-      mode = 'backoff'; allowed = false; hardStop = true;
-      reason = `processor power limit is ${native.processor_limit_percent}% under load`;
     } else {
-      const processNames = [...new Set([
-        ...this.config.resources.priorityProcessNames,
-        ...engineProcessNames,
-      ])];
-      const runningProcesses = await this.processProbe(processNames);
-      engineProcessRunning = runningProcesses.some((name) => engineProcessNames.has(name.toLowerCase()));
-      blockingProcesses = runningProcesses.filter((name) => !engineProcessNames.has(name.toLowerCase()));
-      if (blockingProcesses.length) {
+      ({ native, runningProcesses } = await this.operatingSystemSnapshot(processNames));
+      if (native?.on_battery || native?.battery_saver) {
         mode = 'backoff'; allowed = false; hardStop = true;
-        reason = `configured priority process is running: ${blockingProcesses.join(', ')}`;
-      } else if (engineProcessRunning) {
-        this.idleSamples = 0;
-        this.workerLimit = 1;
-        this.lastRampAt = this.now();
-        if (!courtesyWorkClasses.has(workClass)) {
-          mode = 'backoff'; allowed = false;
-          reason = `flashfork_uci.exe is running; ${workClass} is deferred`;
-        }
+        reason = native.battery_saver ? 'Windows battery saver is active' : 'system is running on battery';
+      } else if (Number(native?.processor_limit_percent) < 60 && idleRatio < 0.50) {
+        mode = 'backoff'; allowed = false; hardStop = true;
+        reason = `processor power limit is ${native.processor_limit_percent}% under load`;
       } else {
-        this.idleSamples = idleRatio >= 0.80 ? this.idleSamples + 1 : 0;
-        const inputIsIdle = !native || Number(native.input_idle_ms) >= 60_000;
-        if (this.idleSamples >= 3 && inputIsIdle) {
-          mode = 'idle_harvest';
-          if (this.now() - this.lastRampAt >= 30_000) {
-            this.workerLimit = Math.min(this.config.analysis.maximumWorkers, this.workerLimit + 1);
-            this.lastRampAt = this.now();
-          }
-        } else {
+        const runningEngines = runningProcesses.filter((name) => engineProcessNames.has(name.toLowerCase()));
+        engineProcessRunning = runningEngines.length > 0;
+        blockingProcesses = runningProcesses.filter((name) => !engineProcessNames.has(name.toLowerCase()));
+        if (blockingProcesses.length) {
+          mode = 'backoff'; allowed = false; hardStop = true;
+          reason = `configured priority process is running: ${blockingProcesses.join(', ')}`;
+        } else if (engineProcessRunning) {
+          this.idleSamples = 0;
           this.workerLimit = 1;
           this.lastRampAt = this.now();
+          if (workClass === RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS) {
+            mode = 'background_sip';
+            this.workerLimit = this.config.nativeHelperAvailable
+              ? Math.min(this.config.analysis.maximumWorkers, this.config.analysis.backgroundSipWorkers)
+              : 1;
+            reason = `foreground UCI engine is running (${runningEngines.join(', ')}); Stockfish is constrained to background sip`;
+          } else if (!courtesyWorkClasses.has(workClass)) {
+            mode = 'backoff'; allowed = false;
+            reason = `foreground UCI engine is running (${runningEngines.join(', ')}); ${workClass} is deferred`;
+          }
+        } else {
+          this.idleSamples = idleRatio >= 0.80 ? this.idleSamples + 1 : 0;
+          const inputIsIdle = !native || Number(native.input_idle_ms) >= 60_000;
+          if (this.idleSamples >= 3 && inputIsIdle) {
+            mode = 'idle_harvest';
+            if (this.now() - this.lastRampAt >= 30_000) {
+              this.workerLimit = Math.min(this.config.analysis.maximumWorkers, this.workerLimit + 1);
+              this.lastRampAt = this.now();
+            }
+          } else {
+            this.workerLimit = 1;
+            this.lastRampAt = this.now();
+          }
         }
       }
     }
@@ -145,7 +174,9 @@ export class ResourceGovernor {
     }
     this.last = {
       workClass, mode, allowed, reason, hardStop, engineProcessRunning, blockingProcesses,
-      workerLimit: mode === 'idle_harvest' ? this.workerLimit : 1,
+      workerLimit: mode === 'idle_harvest' || mode === 'background_sip' ? this.workerLimit : 1,
+      dutyCyclePercent: mode === 'background_sip' ? this.config.analysis.backgroundSipDutyCyclePercent : 100,
+      efficiencyCoreLimit: mode === 'background_sip' ? this.config.analysis.backgroundSipEfficiencyCores : 0,
       idlePercent: Number((idleRatio * 100).toFixed(1)), freeWorkspaceGb: Number(freeWorkspaceGb.toFixed(1)),
       availableMemoryGb: Number(availableMemoryGb.toFixed(1)), sampledAt: new Date().toISOString(),
       nativeHelper: Boolean(native), onBattery: Boolean(native?.on_battery), inputIdleMs: native?.input_idle_ms ?? null,

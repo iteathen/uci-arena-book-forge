@@ -4,8 +4,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -78,15 +80,22 @@ int probe() {
     return 0;
 }
 
-void apply_process_courtesy(HANDLE process) {
-    SetPriorityClass(process, IDLE_PRIORITY_CLASS);
+struct CourtesyResult {
+    bool idle_priority = false;
+    bool eco_qos = false;
+};
+
+CourtesyResult apply_process_courtesy(HANDLE process) {
+    CourtesyResult result{};
+    result.idle_priority = SetPriorityClass(process, IDLE_PRIORITY_CLASS) != FALSE;
 
 #if defined(PROCESS_POWER_THROTTLING_CURRENT_VERSION) && defined(PROCESS_POWER_THROTTLING_EXECUTION_SPEED)
     PROCESS_POWER_THROTTLING_STATE throttling{};
     throttling.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
     throttling.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
     throttling.StateMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
-    SetProcessInformation(process, ProcessPowerThrottling, &throttling, sizeof(throttling));
+    result.eco_qos = SetProcessInformation(
+        process, ProcessPowerThrottling, &throttling, sizeof(throttling)) != FALSE;
 #endif
 
     using NtSetInformationProcess = LONG(NTAPI*)(HANDLE, ULONG, PVOID, ULONG);
@@ -99,6 +108,115 @@ void apply_process_courtesy(HANDLE process) {
         constexpr ULONG process_io_priority = 33;
         set_information(process, process_io_priority, &very_low_io_priority, sizeof(very_low_io_priority));
     }
+    return result;
+}
+
+struct CpuSetCandidate {
+    ULONG id = 0;
+    WORD group = 0;
+    BYTE core = 0;
+    BYTE logical = 0;
+    BYTE efficiency = 0;
+};
+
+struct CpuSetResult {
+    bool available = false;
+    bool heterogeneous = false;
+    bool applied = false;
+    unsigned int eligible = 0;
+    unsigned int selected = 0;
+    unsigned int minimum_efficiency_class = 0;
+    unsigned int maximum_efficiency_class = 0;
+};
+
+CpuSetResult apply_efficiency_cpu_sets(HANDLE process, unsigned int maximum_cores) {
+    CpuSetResult result{};
+    if (maximum_cores == 0) return result;
+
+    ULONG required = 0;
+    GetSystemCpuSetInformation(nullptr, 0, &required, process, 0);
+    if (required == 0 || GetLastError() != ERROR_INSUFFICIENT_BUFFER) return result;
+    std::vector<unsigned char> buffer(required);
+    if (GetSystemCpuSetInformation(
+            reinterpret_cast<PSYSTEM_CPU_SET_INFORMATION>(buffer.data()), required,
+            &required, process, 0) == FALSE) return result;
+
+    std::vector<CpuSetCandidate> candidates;
+    BYTE minimum_class = std::numeric_limits<BYTE>::max();
+    BYTE maximum_class = 0;
+    for (ULONG offset = 0; offset + sizeof(SYSTEM_CPU_SET_INFORMATION) <= required;) {
+        const auto* information = reinterpret_cast<const SYSTEM_CPU_SET_INFORMATION*>(buffer.data() + offset);
+        if (information->Size == 0 || offset + information->Size > required) break;
+        if (information->Type == CpuSetInformation) {
+            const auto flags = information->CpuSet.AllFlags;
+            const bool parked = (flags & SYSTEM_CPU_SET_INFORMATION_PARKED) != 0;
+            const bool allocated_elsewhere = (flags & SYSTEM_CPU_SET_INFORMATION_ALLOCATED) != 0 &&
+                (flags & SYSTEM_CPU_SET_INFORMATION_ALLOCATED_TO_TARGET_PROCESS) == 0;
+            if (!parked && !allocated_elsewhere) {
+                candidates.push_back({
+                    information->CpuSet.Id, information->CpuSet.Group, information->CpuSet.CoreIndex,
+                    information->CpuSet.LogicalProcessorIndex, information->CpuSet.EfficiencyClass,
+                });
+                minimum_class = std::min(minimum_class, information->CpuSet.EfficiencyClass);
+                maximum_class = std::max(maximum_class, information->CpuSet.EfficiencyClass);
+            }
+        }
+        offset += information->Size;
+    }
+    if (candidates.empty()) return result;
+    result.available = true;
+    result.eligible = static_cast<unsigned int>(candidates.size());
+    result.minimum_efficiency_class = minimum_class;
+    result.maximum_efficiency_class = maximum_class;
+    result.heterogeneous = minimum_class < maximum_class;
+    if (!result.heterogeneous) return result;
+
+    std::sort(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) {
+        return std::tie(left.efficiency, left.group, left.core, left.logical, left.id) <
+            std::tie(right.efficiency, right.group, right.core, right.logical, right.id);
+    });
+    std::vector<ULONG> selected;
+    WORD previous_group = std::numeric_limits<WORD>::max();
+    BYTE previous_core = std::numeric_limits<BYTE>::max();
+    for (const auto& candidate : candidates) {
+        if (candidate.efficiency != minimum_class) break;
+        if (candidate.group == previous_group && candidate.core == previous_core) continue;
+        selected.push_back(candidate.id);
+        previous_group = candidate.group;
+        previous_core = candidate.core;
+        if (selected.size() >= maximum_cores) break;
+    }
+    if (selected.empty()) return result;
+    result.applied = SetProcessDefaultCpuSets(
+        process, selected.data(), static_cast<ULONG>(selected.size())) != FALSE;
+    result.selected = result.applied ? static_cast<unsigned int>(selected.size()) : 0;
+    return result;
+}
+
+int apply_process_profile(DWORD process_id, unsigned int efficiency_cores) {
+    const auto process = OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_INFORMATION | PROCESS_SET_LIMITED_INFORMATION,
+        FALSE,
+        process_id
+    );
+    if (process == nullptr) return 2;
+    const auto courtesy = apply_process_courtesy(process);
+    const auto cpu_sets = apply_efficiency_cpu_sets(process, efficiency_cores);
+    CloseHandle(process);
+    std::cout
+        << "{\"schema\":\"flashfork_book_forge_process_profile_v1\""
+        << ",\"applied\":" << (courtesy.idle_priority ? "true" : "false")
+        << ",\"idle_priority\":" << (courtesy.idle_priority ? "true" : "false")
+        << ",\"eco_qos\":" << (courtesy.eco_qos ? "true" : "false")
+        << ",\"cpu_sets_available\":" << (cpu_sets.available ? "true" : "false")
+        << ",\"heterogeneous\":" << (cpu_sets.heterogeneous ? "true" : "false")
+        << ",\"cpu_set_applied\":" << (cpu_sets.applied ? "true" : "false")
+        << ",\"eligible_cpu_sets\":" << cpu_sets.eligible
+        << ",\"selected_cpu_sets\":" << cpu_sets.selected
+        << ",\"minimum_efficiency_class\":" << cpu_sets.minimum_efficiency_class
+        << ",\"maximum_efficiency_class\":" << cpu_sets.maximum_efficiency_class
+        << "}\n";
+    return courtesy.idle_priority ? 0 : 2;
 }
 
 bool heartbeat_stale(const std::string& filename, std::uint64_t stale_seconds) {
@@ -158,6 +276,17 @@ int supervise(DWORD process_id, const std::string& heartbeat_file, std::uint64_t
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--probe") return probe();
+    if (argc == 5 && std::string_view(argv[1]) == "--apply-process-profile" &&
+        std::string_view(argv[3]) == "--efficiency-cores") {
+        try {
+            const auto process_id = static_cast<DWORD>(std::stoul(argv[2]));
+            const auto efficiency_cores = static_cast<unsigned int>(std::stoul(argv[4]));
+            return process_id == 0 || efficiency_cores > 2 ? 2 :
+                apply_process_profile(process_id, efficiency_cores);
+        } catch (...) {
+            return 2;
+        }
+    }
     if (argc == 7 && std::string_view(argv[1]) == "--supervise" &&
         std::string_view(argv[3]) == "--heartbeat" && std::string_view(argv[5]) == "--stale-seconds") {
         try {
@@ -168,6 +297,7 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    std::cerr << "Usage: book_forge_guard --probe | --supervise <pid> --heartbeat <path> --stale-seconds <seconds>\n";
+    std::cerr << "Usage: book_forge_guard --probe | --apply-process-profile <pid> --efficiency-cores <0..2> | "
+        "--supervise <pid> --heartbeat <path> --stale-seconds <seconds>\n";
     return 2;
 }
