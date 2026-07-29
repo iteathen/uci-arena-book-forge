@@ -13,23 +13,23 @@ pipeline used by file sources. The token is read only from its configured file
 and is never included in status, logs, task actions, or snapshot provenance.
 
 Requires Node.js 24.15 or newer. Install the locked dependencies with
-`npm ci --prefix services/book-forge`.
+`npm ci`.
 
 Quick integration bootstrap:
 
 ```powershell
-node services/book-forge/src/cli.mjs init --workspace E:\book-forge
-node services/book-forge/src/cli.mjs source add --workspace E:\book-forge --fixture bootstrap_v1
-node services/book-forge/src/cli.mjs daemon --workspace E:\book-forge --once
-node services/book-forge/src/cli.mjs status --workspace E:\book-forge --json
+node src/cli.mjs init --workspace E:\book-forge
+node src/cli.mjs source add --workspace E:\book-forge --fixture bootstrap_v1
+node src/cli.mjs daemon --workspace E:\book-forge --once
+node src/cli.mjs status --workspace E:\book-forge --json
 ```
 
 Inspect or manually advance remote acquisition:
 
 ```powershell
-node services/book-forge/src/cli.mjs acquisition status --workspace E:\book-forge
-node services/book-forge/src/cli.mjs acquisition run --workspace E:\book-forge --max-requests 1
-node services/book-forge/src/cli.mjs acquisition retry-auth --workspace E:\book-forge
+node src/cli.mjs acquisition status --workspace E:\book-forge
+node src/cli.mjs acquisition run --workspace E:\book-forge --max-requests 1
+node src/cli.mjs acquisition retry-auth --workspace E:\book-forge
 ```
 
 Acquisition is default-on, permits only one request at a time, waits at least
@@ -44,8 +44,8 @@ Install the continuous worker as a per-user Windows logon task. Installation is
 idempotent and starts it immediately:
 
 ```powershell
-node services/book-forge/src/cli.mjs startup install --workspace E:\book-forge
-node services/book-forge/src/cli.mjs startup status --workspace E:\book-forge
+node src/cli.mjs startup install --workspace E:\book-forge
+node src/cli.mjs startup status --workspace E:\book-forge
 ```
 
 Task Scheduler runs a native Windows GUI-subsystem launcher, which starts the
@@ -97,8 +97,8 @@ selection, battery state, and real input-idle telemetry—OS controls Node does
 not expose:
 
 ```powershell
-cmake -S packages/background-service-runtime/native -B packages/background-service-runtime/native/build
-cmake --build packages/background-service-runtime/native/build --config Release
+cmake -S vendor/background-service-runtime/native -B build/native
+cmake --build build/native --config Release
 ```
 
 Without that helper, Book Forge remains functional and conservatively uses the
@@ -106,10 +106,11 @@ portable low-priority, CPU, memory, disk, and priority-process controls.
 
 ## Package boundary and persistent data
 
-Book Forge is rooted at `services/book-forge` in a source checkout and imports
-only its declared Node dependencies. The installed component is relocatable,
-uses its own packaged dependency closure, and does not require an Arena source
-checkout or the Evidence Service.
+The repository root is the Book Forge package root. Shared UCI Arena packages
+are regular-file inputs pinned by `vendor/upstream.lock.json`; they never reach
+into another checkout. The installed component is relocatable, uses its own
+packaged dependency closure, and does not require Arena or Evidence Service
+source.
 
 `contracts/service-contract.json` is the installed public boundary. It binds
 the component version, CLI, configuration and status schemas, capabilities,
@@ -149,12 +150,12 @@ it automatically if the eval, rarity, LCB, Elo, and zero-regression gates all
 pass:
 
 ```powershell
-node services/book-forge/src/cli.mjs qualification record --workspace E:\book-forge --content 0123456789abcdef0123 --elo-lower-bound -3.2 --uci-regressions 0 --evidence arena\results\book-candidate.json
+node src/cli.mjs qualification record --workspace E:\book-forge --content 0123456789abcdef0123 --elo-lower-bound -3.2 --uci-regressions 0 --evidence E:\evidence\book-candidate.json
 ```
 
 Sources remain independently removable without replaying other PGNs:
 
 ```powershell
-node services/book-forge/src/cli.mjs source quarantine 12 --workspace E:\book-forge
-node services/book-forge/src/cli.mjs source restore 12 --workspace E:\book-forge
+node src/cli.mjs source quarantine 12 --workspace E:\book-forge
+node src/cli.mjs source restore 12 --workspace E:\book-forge
 ```

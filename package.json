@@ -1,6 +1,6 @@
 {
   "name": "@uci-arena/book-forge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -10,10 +10,13 @@
     "book-forge": "src/cli.mjs"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "check:boundary": "node tools/repository-boundary-check.mjs",
+    "check:vendor": "node tools/verify-vendor-lock.mjs",
+    "check": "npm run check:vendor && npm run check:boundary && npm test"
   },
   "dependencies": {
-    "@uci-arena/background-service-runtime": "file:../../packages/background-service-runtime",
+    "@uci-arena/background-service-runtime": "file:vendor/background-service-runtime",
     "@echecs/zobrist": "1.0.2",
     "chess.js": "1.4.0"
   }

@@ -11,7 +11,8 @@ meta:
     consumed through the existing UCI knowledge-source file contract.
 
 authority:
-  production_builder: services/book-forge
+  production_repository: iteathen/uci-arena-book-forge
+  production_builder: src
   runtime_consumer: specs/uci_knowledge_sources_v1.yaml
   rules:
     - "Book Forge never imports engine or UCI runtime source and never mutates a running engine."
@@ -21,7 +22,7 @@ authority:
 
 runtime:
   node_minimum: 24.15.0
-  package_root: services/book-forge
+  package_root: .
   default_workspace_windows: '%LOCALAPPDATA%\UCI Arena\Book Forge'
   default_workspace_linux: '$XDG_STATE_HOME/uci-arena/book-forge'
   portable_workspace_environment: BOOK_FORGE_ROOT
@@ -267,7 +268,7 @@ windows_startup:
   mechanism: per_user_windows_task_scheduler_logon_task
   task_name: UCI Arena Book Forge
   launcher:
-    artifact: packages/background-service-runtime/native/build/Release/uci_arena_service_launcher.exe
+    artifact: native/bin/uci_arena_service_launcher.exe
     pe_subsystem: windows_gui
     node_creation_flags: [CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT]
     stdio: windows_null_device
@@ -306,7 +307,7 @@ linux_startup:
 
 relocatable_install:
   package_root: derived_from_import_meta
-  suite_root: explicit_UCI_ARENA_SUITE_ROOT_or_source_checkout_fallback
+  suite_root: explicit_UCI_ARENA_SUITE_ROOT_or_package_root_development_default
   repository_checkout_required: false
   default_token_file: per_user_config_directory_reference
   rules:

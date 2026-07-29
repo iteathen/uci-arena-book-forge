@@ -1,0 +1,17 @@
+meta:
+  spec_id: book_forge_foundation_v1
+  version: 1
+  status: active
+  owner: governance
+
+north_star: >
+  Maintain an independently buildable and releasable opening-book production
+  service whose only production output boundary is a mutually validated,
+  immutable UCI Arena opening-book snapshot.
+
+hard_rules:
+  - The service never imports UCI Arena or Evidence Service source.
+  - Runtime engines and helpers are explicit typed dependencies.
+  - Persistent observations and workspaces survive repair, upgrade, and normal uninstall.
+  - Credentials are referenced by path and never inspected by tests or release tooling.
+  - Component and snapshot releases carry exact digests, SBOMs, test receipts, and keyless provenance.

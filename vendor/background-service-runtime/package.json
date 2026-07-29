@@ -1,0 +1,17 @@
+{
+  "name": "@uci-arena/background-service-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "exports": {
+    "./lease": "./src/background-resource-lease.mjs",
+    "./resource-isolation": "./src/resource-isolation.mjs",
+    "./native-resource-helper": "./src/native-resource-helper.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

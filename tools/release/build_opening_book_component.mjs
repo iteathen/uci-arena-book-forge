@@ -4,16 +4,16 @@ import { cp, mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { Catalog } from "../../services/book-forge/src/catalog.mjs";
+import { Catalog } from "../../src/catalog.mjs";
 import {
   buildSnapshot,
   validateSnapshot,
-} from "../../services/book-forge/src/compiler.mjs";
-import { loadConfig } from "../../services/book-forge/src/config.mjs";
+} from "../../src/compiler.mjs";
+import { loadConfig } from "../../src/config.mjs";
 import {
   ingestSource,
   registerInput,
-} from "../../services/book-forge/src/ingest.mjs";
+} from "../../src/ingest.mjs";
 
 async function main() {
   const outputFlag = process.argv.indexOf("--output");

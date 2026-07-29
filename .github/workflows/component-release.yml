@@ -1,0 +1,171 @@
+name: Book Forge component candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: Component
+        type: choice
+        required: true
+        options: [book-forge, opening-book]
+      version:
+        description: Immutable component version
+        type: string
+        required: true
+      target:
+        description: Target triple
+        type: choice
+        required: true
+        options: [windows-x86_64, linux-x86_64]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: book-forge-${{ inputs.component }}-${{ inputs.version }}-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ${{ inputs.target == 'windows-x86_64' && 'windows-latest' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_COMPONENT: ${{ inputs.component }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_TARGET: ${{ inputs.target }}
+      RELEASE_WORKFLOW_IDENTITY: ${{ github.workflow_ref }}#${{ github.run_id }}.${{ github.run_attempt }}
+    steps:
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.15.0
+      - name: Validate immutable inputs
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_COMPONENT -notmatch '^(book-forge|opening-book)$') {
+            throw 'unsupported component'
+          }
+          if ($env:RELEASE_VERSION -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:[-.][A-Za-z0-9.-]+)?$') {
+            throw 'version must be immutable semver text'
+          }
+          if ($env:RELEASE_TARGET -notmatch '^(windows-x86_64|linux-x86_64)$') {
+            throw 'unsupported target'
+          }
+      - run: npm ci
+      - run: npm run check
+      - name: Build native background helpers
+        if: inputs.component == 'book-forge' && inputs.target == 'windows-x86_64'
+        shell: pwsh
+        run: |
+          cmake -S vendor/background-service-runtime/native -B build/native -A x64
+          cmake --build build/native --config Release
+          cmake --install build/native --config Release --prefix provider_stage/background_service_native
+      - name: Build deterministic bootstrap snapshot
+        if: inputs.component == 'opening-book'
+        run: node tools/release/build_opening_book_component.mjs --output provider_stage/opening_book
+      - name: Write exact test receipt
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_COMPONENT -eq 'book-forge') {
+            $tests = @('book_forge_tests', 'startup_contract', 'bootstrap_snapshot_validation')
+          } else {
+            $tests = @('bootstrap_snapshot_validation', 'mutual_digest_validation')
+          }
+          $arguments = @(
+            'tools/release/write_test_receipt.mjs',
+            '--definition', "release/components/$env:RELEASE_COMPONENT.json",
+            '--target', $env:RELEASE_TARGET,
+            '--output', 'provider_stage/component-test-receipt.json',
+            '--workflow-identity', $env:RELEASE_WORKFLOW_IDENTITY
+          )
+          foreach ($test in $tests) { $arguments += @('--passed-test', $test) }
+          & node @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'test receipt construction failed' }
+      - name: Build deterministic component
+        shell: pwsh
+        run: |
+          $epoch = git show -s --format=%ct HEAD
+          node tools/release/component_release.mjs `
+            --definition "release/components/$env:RELEASE_COMPONENT.json" `
+            --version $env:RELEASE_VERSION `
+            --target $env:RELEASE_TARGET `
+            --output-dir dist/provider `
+            --source-date-epoch "$epoch" `
+            --workflow-identity $env:RELEASE_WORKFLOW_IDENTITY `
+            --test-receipt provider_stage/component-test-receipt.json
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+        with:
+          cosign-release: v3.0.6
+      - name: Prepare attestation
+        id: attestation
+        shell: pwsh
+        env:
+          STATEMENT_DIRECTORY: ${{ runner.temp }}/provider-attestation
+        run: |
+          node tools/release/provider_attestation.mjs prepare `
+            --output-dir dist/provider `
+            --statement-dir $env:STATEMENT_DIRECTORY `
+            --github-output $env:GITHUB_OUTPUT
+      - name: Sign and verify keyless provenance
+        shell: pwsh
+        env:
+          ARTIFACT_PATH: ${{ steps.attestation.outputs.artifact_path }}
+          BUNDLE_PATH: ${{ steps.attestation.outputs.bundle_path }}
+          STATEMENT_PATH: ${{ steps.attestation.outputs.statement_path }}
+          PREDICATE_TYPE: ${{ steps.attestation.outputs.predicate_type }}
+          CERTIFICATE_IDENTITY: https://github.com/${{ github.workflow_ref }}
+        run: |
+          cosign attest-blob --yes --statement $env:STATEMENT_PATH --bundle $env:BUNDLE_PATH
+          if ($LASTEXITCODE -ne 0) { throw 'Sigstore attestation failed' }
+          cosign verify-blob-attestation `
+            --bundle $env:BUNDLE_PATH `
+            --certificate-identity $env:CERTIFICATE_IDENTITY `
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com `
+            --certificate-github-workflow-repository $env:GITHUB_REPOSITORY `
+            --certificate-github-workflow-sha $env:GITHUB_SHA `
+            --certificate-github-workflow-name $env:GITHUB_WORKFLOW `
+            --certificate-github-workflow-ref $env:GITHUB_REF `
+            --certificate-github-workflow-trigger $env:GITHUB_EVENT_NAME `
+            --type $env:PREDICATE_TYPE `
+            $env:ARTIFACT_PATH
+          if ($LASTEXITCODE -ne 0) { throw 'Sigstore verification failed' }
+          node tools/release/provider_attestation.mjs verify-bundle `
+            --bundle $env:BUNDLE_PATH `
+            --statement $env:STATEMENT_PATH
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ inputs.component }}-${{ inputs.version }}-${{ inputs.target }}
+          path: dist/provider/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: component-candidate
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ inputs.component }}-${{ inputs.version }}-${{ inputs.target }}
+          path: dist/provider
+      - name: Publish immutable private candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMPONENT: ${{ inputs.component }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_TARGET: ${{ inputs.target }}
+        run: |
+          tag="component/${RELEASE_COMPONENT}/v${RELEASE_VERSION}/${RELEASE_TARGET}"
+          gh release create "${tag}" dist/provider/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --prerelease \
+            --title "${RELEASE_COMPONENT} ${RELEASE_VERSION} ${RELEASE_TARGET}" \
+            --notes "Immutable private component candidate; UCI Arena Manager retains suite promotion authority."
