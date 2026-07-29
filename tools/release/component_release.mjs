@@ -288,6 +288,32 @@ export function buildComponent({
         throw new Error(`component entrypoint ${name} is not in the payload: ${relative}`);
       }
     }
+    let managerIntegrationApi;
+    if (definition.manager_integration_api !== undefined) {
+      const candidate = definition.manager_integration_api;
+      const entrypoint = candidate?.entrypoint;
+      const operations = exactIdentifierSet(candidate?.operations);
+      if (candidate?.schema !== "uci_arena_manager_service_api_v1"
+          || candidate.version !== "1.0"
+          || candidate.transport !== "cli_json"
+          || typeof entrypoint !== "string"
+          || !Object.hasOwn(entrypoints, entrypoint)
+          || !Array.isArray(candidate.arguments)
+          || candidate.arguments.length !== 1
+          || candidate.arguments[0] !== "api"
+          || !operations
+          || !operations.includes("describe")
+          || !operations.includes("status")
+          || !operations.includes("outputs_list")
+          || !operations.includes("outputs_inspect")
+          || candidate.output_schema !== "uci_arena_service_output_v1") {
+        throw new Error("invalid Manager integration API declaration");
+      }
+      managerIntegrationApi = {
+        ...candidate,
+        operations,
+      };
+    }
     let contractManifest;
     if (definition.contract_manifest !== undefined) {
       contractManifest = normalizedRelative(definition.contract_manifest);
@@ -320,6 +346,8 @@ export function buildComponent({
           || contract.startup?.linux !== definition.startup?.linux
           || contract.health_smoke?.command !== "status"
           || contract.health_smoke?.success !== "exit_zero_and_status_schema"
+          || JSON.stringify(contract.manager_integration_api ?? null)
+            !== JSON.stringify(definition.manager_integration_api ?? null)
           || contract.persistence?.upgrade !== "preserve_and_migrate"
           || contract.persistence?.repair !== "preserve"
           || contract.persistence?.uninstall_default !== "preserve"
@@ -339,6 +367,9 @@ export function buildComponent({
       target_triple: target,
       entrypoints,
       ...(contractManifest ? { contract_manifest: contractManifest } : {}),
+      ...(managerIntegrationApi
+        ? { manager_integration_api: managerIntegrationApi }
+        : {}),
       capabilities: definition.capabilities ?? [],
       dependencies: definition.dependencies ?? [],
       ...(definition.default_model ? { default_model: definition.default_model } : {}),

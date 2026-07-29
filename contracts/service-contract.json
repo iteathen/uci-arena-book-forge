@@ -23,6 +23,21 @@
     "command": "status",
     "success": "exit_zero_and_status_schema"
   },
+  "manager_integration_api": {
+    "schema": "uci_arena_manager_service_api_v1",
+    "version": "1.0",
+    "transport": "cli_json",
+    "entrypoint": "cli",
+    "arguments": ["api"],
+    "operations": [
+      "describe",
+      "status",
+      "outputs_list",
+      "outputs_inspect",
+      "config_validate"
+    ],
+    "output_schema": "uci_arena_service_output_v1"
+  },
   "outputs": {
     "opening_snapshot_manifest": "snapshot.manifest.json",
     "publication_channels": ["integration", "qualified"]

@@ -13,6 +13,10 @@ repository:
 contracts:
   component_ids: [book_forge.service, opening_book.standard]
   installed_cli: services/book-forge/src/cli.mjs
+  manager_integration_api:
+    schema: uci_arena_manager_service_api_v1
+    version: '1.0'
+    transport: cli_json
   shared_runtime_package: '@uci-arena/background-service-runtime'
   shared_runtime_lock: vendor/upstream.lock.json
 
@@ -23,6 +27,11 @@ rules:
   - Installed layout, workspace roots, schemas, startup identities, and component ids remain stable.
   - UCI Arena validates snapshots as a consumer but does not build Book Forge releases.
   - UCI Arena Manager remains the only suite composition and promotion authority.
+  - Manager discovers the API through arena-component.json and never opens the
+    Book Forge catalog, scans the workspace, or infers artifact meaning from
+    filenames.
+  - Unknown API major versions, component substitution, malformed output
+    identities, and paths escaping the declared snapshot root fail closed.
 
 validation:
   - exact_vendor_lock
