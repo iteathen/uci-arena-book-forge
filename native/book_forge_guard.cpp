@@ -70,7 +70,7 @@ int probe() {
     }
 
     std::cout
-        << "{\"schema\":\"flashfork_book_forge_native_probe_v1\""
+        << "{\"schema\":\"uci_arena_book_forge_native_probe_v1\""
         << ",\"on_battery\":" << (on_battery ? "true" : "false")
         << ",\"battery_saver\":" << (battery_saver ? "true" : "false")
         << ",\"input_idle_ms\":" << input_idle_ms
@@ -204,7 +204,7 @@ int apply_process_profile(DWORD process_id, unsigned int efficiency_cores) {
     const auto cpu_sets = apply_efficiency_cpu_sets(process, efficiency_cores);
     CloseHandle(process);
     std::cout
-        << "{\"schema\":\"flashfork_book_forge_process_profile_v1\""
+        << "{\"schema\":\"uci_arena_book_forge_process_profile_v1\""
         << ",\"applied\":" << (courtesy.idle_priority ? "true" : "false")
         << ",\"idle_priority\":" << (courtesy.idle_priority ? "true" : "false")
         << ",\"eco_qos\":" << (courtesy.eco_qos ? "true" : "false")

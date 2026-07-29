@@ -1,5 +1,5 @@
 {
-  "schema": "flashfork_book_forge_fixture_v1",
+  "schema": "uci_arena_book_forge_fixture_v1",
   "id": "bootstrap_v1",
   "qualification": "integration_only",
   "observations": [

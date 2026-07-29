@@ -1,5 +1,5 @@
 {
-  "schema": "flashfork_book_forge_config_v1",
+  "schema": "uci_arena_book_forge_config_v1",
   "workspace": "E:/book-forge",
   "policyFile": "policy/strong_rare_v1.policy",
   "stockfish": "../../third_party/bin/stockfish.exe",
@@ -58,7 +58,7 @@
     "pauseAvailableMemoryGb": 6,
     "courtesyCpuPercent": 20,
     "idleCpuPercent": 80,
-    "priorityProcessNames": ["flashfork_uci.exe", "msbuild.exe", "cl.exe"]
+    "priorityProcessNames": ["uci_arena_engine.exe", "msbuild.exe", "cl.exe"]
   },
   "maintenance": {
     "intervalDays": 30,

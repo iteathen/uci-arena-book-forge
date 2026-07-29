@@ -637,7 +637,7 @@ export class Catalog {
     const channels = this.database.prepare('SELECT * FROM channels ORDER BY channel').all();
     const snapshots = this.database.prepare('SELECT COUNT(*) AS count FROM snapshots').get();
     const qualificationGates = this.database.prepare('SELECT COUNT(*) AS count FROM qualification_gates WHERE passed=1').get();
-    return { schema: 'flashfork_book_forge_status_v2', workspace: this.config.workspace, control: this.control(), sources, channels,
+    return { schema: 'uci_arena_book_forge_status_v2', workspace: this.config.workspace, control: this.control(), sources, channels,
       snapshots: Number(snapshots.count), passingQualificationGates: Number(qualificationGates.count),
       daemon: this.daemonState(), acquisition: this.acquisitionStatus(),
       audit: { enabled: Boolean(this.config.pgnAudit.enabled), status: this.config.pgnAudit.enabled ? 'not_implemented' : 'disabled' } };

@@ -90,7 +90,7 @@ async function installLinuxStartup(config) {
   await execFileAsync('systemctl', ['--user', 'enable', '--now', linuxUnitName],
     { timeout: 20_000 });
   const evidence = {
-    schema: 'flashfork_book_forge_startup_v2',
+    schema: 'uci_arena_book_forge_startup_v2',
     platform: 'linux',
     unitName: linuxUnitName,
     unitPath,
