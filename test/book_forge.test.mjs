@@ -442,6 +442,37 @@ test('acquisition-only execution stays isolated from ingestion, analysis, and pu
   assert.equal(report.maintenance, null);
 });
 
+test('acquisition-only hard stop does not fabricate downstream phase reports', async (t) => {
+  const config = await workspace(t);
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const reason = 'test acquisition hard stop';
+  const governor = {
+    async permit(workClass) {
+      assert.equal(workClass, RESOURCE_WORK_CLASSES.ACQUISITION);
+      return { allowed: false, hardStop: true, mode: 'backoff', reason };
+    },
+  };
+
+  const report = await runCycle(
+    catalog,
+    config,
+    governor,
+    { async run() { assert.fail('acquisition must not start after a hard stop'); } },
+    () => assert.fail('no phase may start after an acquisition hard stop'),
+    undefined,
+    true,
+  );
+
+  assert.equal(report.acquisition.stopped, reason);
+  assert.deepEqual(report.discovered, []);
+  assert.deepEqual(report.ingested, []);
+  assert.equal(report.integration, null);
+  assert.equal(report.analysis, null);
+  assert.equal(report.qualified, null);
+  assert.equal(report.maintenance, null);
+});
+
 test('fixture ingestion is idempotent and creates deterministic integration snapshots only', async (t) => {
   const config = await workspace(t);
   const catalog = new Catalog(config);

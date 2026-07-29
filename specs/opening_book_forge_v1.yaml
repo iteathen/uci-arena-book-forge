@@ -118,6 +118,13 @@ acquisition:
     contribution_mode: audit_only
     complete_archive_retention: forbidden
     rule: "A Lichess monthly PGN audit may compare Explorer statistics but never contributes observations to a snapshot."
+  acquisition_only_report:
+    rule: >
+      A one-shot acquisition-only execution never reports ingestion,
+      integration publication, Stockfish analysis, qualified publication, or
+      maintenance work. Those report fields remain empty/null even when a
+      resource hard stop blocks acquisition; the typed acquisition and
+      resource fields alone report that stop.
 
 analysis:
   provider: persistent_stockfish_uci_workers

@@ -104,8 +104,10 @@ export async function runCycle(catalog, config, governor = new ResourceGovernor(
   const report = { acquisition: null, discovered: [], ingested: [], integration: null, analysis: null, qualified: null, maintenance: null, resource: acquisitionPermit };
   if (!acquisitionPermit.allowed) {
     report.acquisition = { enabled: config.acquisition.enabled, requests: 0, positions: 0, moves: 0, stopped: acquisitionPermit.reason };
-    report.analysis = { positions: 0, moves: 0, skipped: true, reason: acquisitionPermit.reason };
-    report.maintenance = { skipped: true, reason: acquisitionPermit.reason };
+    if (!acquisitionOnly) {
+      report.analysis = { positions: 0, moves: 0, skipped: true, reason: acquisitionPermit.reason };
+      report.maintenance = { skipped: true, reason: acquisitionPermit.reason };
+    }
     return report;
   }
   setPhase('acquisition', acquisitionPermit.mode);
