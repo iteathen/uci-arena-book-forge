@@ -71,6 +71,32 @@ function exactIdentifierSet(value) {
   return [...value].sort();
 }
 
+export function validatedManagerIntegrationApi(candidate, entrypoints) {
+  const entrypoint = candidate?.entrypoint;
+  const operations = exactIdentifierSet(candidate?.operations);
+  if (candidate?.schema !== "uci_arena_manager_service_api_v1"
+      || candidate.version !== "1.0"
+      || candidate.transport !== "cli_json"
+      || typeof entrypoint !== "string"
+      || !Object.hasOwn(entrypoints, entrypoint)
+      || !Array.isArray(candidate.arguments)
+      || candidate.arguments.length !== 1
+      || candidate.arguments[0] !== "api"
+      || !operations
+      || !operations.includes("describe")
+      || !operations.includes("status")
+      || !operations.includes("outputs_list")
+      || !operations.includes("outputs_inspect")
+      || !operations.includes("config_validate")
+      || candidate.output_schema !== "uci_arena_service_output_v1") {
+    throw new Error("invalid Manager integration API declaration");
+  }
+  return {
+    ...candidate,
+    operations: [...candidate.operations],
+  };
+}
+
 function listFiles(root, relative = "") {
   const directory = path.join(root, relative);
   const rows = [];
@@ -290,29 +316,10 @@ export function buildComponent({
     }
     let managerIntegrationApi;
     if (definition.manager_integration_api !== undefined) {
-      const candidate = definition.manager_integration_api;
-      const entrypoint = candidate?.entrypoint;
-      const operations = exactIdentifierSet(candidate?.operations);
-      if (candidate?.schema !== "uci_arena_manager_service_api_v1"
-          || candidate.version !== "1.0"
-          || candidate.transport !== "cli_json"
-          || typeof entrypoint !== "string"
-          || !Object.hasOwn(entrypoints, entrypoint)
-          || !Array.isArray(candidate.arguments)
-          || candidate.arguments.length !== 1
-          || candidate.arguments[0] !== "api"
-          || !operations
-          || !operations.includes("describe")
-          || !operations.includes("status")
-          || !operations.includes("outputs_list")
-          || !operations.includes("outputs_inspect")
-          || candidate.output_schema !== "uci_arena_service_output_v1") {
-        throw new Error("invalid Manager integration API declaration");
-      }
-      managerIntegrationApi = {
-        ...candidate,
-        operations,
-      };
+      managerIntegrationApi = validatedManagerIntegrationApi(
+        definition.manager_integration_api,
+        entrypoints,
+      );
     }
     let contractManifest;
     if (definition.contract_manifest !== undefined) {

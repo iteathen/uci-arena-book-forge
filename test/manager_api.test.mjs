@@ -15,6 +15,7 @@ import {
   statusApi,
   validateConfigApi,
 } from '../src/manager_api.mjs';
+import { validatedManagerIntegrationApi } from '../tools/release/component_release.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -94,6 +95,13 @@ test('provider definition advertises the same Manager API contract', async () =>
     serviceContract.manager_integration_api,
   );
   assert.equal(definition.manager_integration_api.entrypoint, 'cli');
+  assert.deepEqual(
+    validatedManagerIntegrationApi(
+      definition.manager_integration_api,
+      definition.entrypoints,
+    ),
+    serviceContract.manager_integration_api,
+  );
 });
 
 test('installed CLI API works from an unrelated working directory', async (t) => {
