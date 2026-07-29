@@ -1,7 +1,7 @@
 {
   "schema": "arena_provider_component_definition_v1",
   "component_id": "opening_book.standard",
-  "source_repository": "iteathen/UCI_Arena",
+  "source_repository": "iteathen/uci-arena-book-forge",
   "include": [
     {"source": "provider_stage/opening_book", "target": "opening_books"},
     {"source": "release/PROJECT-LICENSE-NOTICE.txt", "target": "licenses/LICENSE.txt"}

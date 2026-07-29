@@ -8,6 +8,14 @@ import { buildSnapshot, validateSnapshot } from './compiler.mjs';
 import { runDaemon } from './daemon.mjs';
 import { registerInput, sha256File } from './ingest.mjs';
 import { runMaintenance } from './maintenance.mjs';
+import {
+  apiError,
+  describeApi,
+  inspectOutputApi,
+  listOutputsApi,
+  statusApi,
+  validateConfigApi,
+} from './manager_api.mjs';
 import { publishSnapshot } from './publisher.mjs';
 import {
   installStartup,
@@ -39,8 +47,8 @@ function output(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}
 
 async function main() {
   const { positional, options } = parseArguments(process.argv.slice(2));
-  const [command, subcommand, argument] = positional;
-  if (!command) throw new Error('Usage: book-forge <init|source <add|quarantine|retire|restore>|acquisition <run|status|retry-auth>|daemon|pause|resume|status|snapshot build|qualification record|maintain|validate|publish|startup <install|status|uninstall>>');
+  const [command, subcommand, argument, detail] = positional;
+  if (!command) throw new Error('Usage: book-forge <init|source <add|quarantine|retire|restore>|acquisition <run|status|retry-auth>|daemon|pause|resume|status|snapshot build|qualification record|maintain|validate|publish|startup <install|status|uninstall>|api <describe|status|outputs <list|inspect>|config validate>>');
   const config = await loadConfig({ configFile: options.config, workspace: options.workspace });
   if (command === 'validate') {
     output({ ok: true, ...(await validateSnapshot(path.resolve(subcommand))) });
@@ -48,7 +56,17 @@ async function main() {
   }
   const catalog = new Catalog(config);
   try {
-    if (command === 'init') {
+    if (command === 'api' && subcommand === 'describe') {
+      output(describeApi());
+    } else if (command === 'api' && subcommand === 'status') {
+      output(statusApi(catalog));
+    } else if (command === 'api' && subcommand === 'outputs' && argument === 'list') {
+      output(await listOutputsApi(catalog, config, options.cursor ?? ''));
+    } else if (command === 'api' && subcommand === 'outputs' && argument === 'inspect') {
+      output(await inspectOutputApi(catalog, config, detail));
+    } else if (command === 'api' && subcommand === 'config' && argument === 'validate') {
+      output(validateConfigApi(config));
+    } else if (command === 'init') {
       output({ ok: true, schema: 'uci_arena_book_forge_init_v1', workspace: config.workspace, status: catalog.status() });
     } else if (command === 'source' && subcommand === 'add') {
       if (!argument && !options.fixture) throw new Error('source add requires a PGN path or --fixture <id>');
@@ -124,6 +142,13 @@ async function main() {
 }
 
 main().catch((error) => {
-  process.stderr.write(`${JSON.stringify({ ok: false, error: error.message }, null, 2)}\n`);
+  const apiOperation = process.argv[2] === 'api'
+    ? process.argv.slice(3, 6).filter(Boolean).join('_')
+    : null;
+  process.stderr.write(`${JSON.stringify(
+    apiOperation ? apiError(apiOperation, error) : { ok: false, error: error.message },
+    null,
+    2,
+  )}\n`);
   process.exitCode = 1;
 });

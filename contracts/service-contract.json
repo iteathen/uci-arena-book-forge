@@ -1,7 +1,7 @@
 {
   "schema": "uci_arena_standalone_service_contract_v1",
   "component_id": "book_forge.service",
-  "component_version": "0.2.0",
+  "component_version": "0.3.0",
   "cli_entrypoint": "services/book-forge/src/cli.mjs",
   "configuration_schema": "uci_arena_book_forge_config_v1",
   "status_schema": "uci_arena_book_forge_status_v2",
@@ -22,6 +22,21 @@
   "health_smoke": {
     "command": "status",
     "success": "exit_zero_and_status_schema"
+  },
+  "manager_integration_api": {
+    "schema": "uci_arena_manager_service_api_v1",
+    "version": "1.0",
+    "transport": "cli_json",
+    "entrypoint": "cli",
+    "arguments": ["api"],
+    "operations": [
+      "describe",
+      "status",
+      "outputs_list",
+      "outputs_inspect",
+      "config_validate"
+    ],
+    "output_schema": "uci_arena_service_output_v1"
   },
   "outputs": {
     "opening_snapshot_manifest": "snapshot.manifest.json",

@@ -11,7 +11,8 @@ meta:
     consumed through the existing UCI knowledge-source file contract.
 
 authority:
-  production_builder: services/book-forge
+  production_repository: iteathen/uci-arena-book-forge
+  production_builder: src
   runtime_consumer: specs/uci_knowledge_sources_v1.yaml
   rules:
     - "Book Forge never imports engine or UCI runtime source and never mutates a running engine."
@@ -21,7 +22,7 @@ authority:
 
 runtime:
   node_minimum: 24.15.0
-  package_root: services/book-forge
+  package_root: .
   default_workspace_windows: '%LOCALAPPDATA%\UCI Arena\Book Forge'
   default_workspace_linux: '$XDG_STATE_HOME/uci-arena/book-forge'
   portable_workspace_environment: BOOK_FORGE_ROOT
@@ -257,17 +258,41 @@ daemon_observability:
     - "The Windows native guard terminates a stale daemon; the persistent native launcher then restarts it with bounded backoff, while Task Scheduler remains a second fallback if the launcher itself exits."
 
 cli:
-  commands: [init, source_add, source_quarantine, source_retire, source_restore, acquisition_run, acquisition_status, acquisition_retry_auth, daemon, pause, resume, status, snapshot_build, qualification_record, maintain, validate, publish, startup_install, startup_status, startup_uninstall]
+  commands: [init, source_add, source_quarantine, source_retire, source_restore, acquisition_run, acquisition_status, acquisition_retry_auth, daemon, pause, resume, status, snapshot_build, qualification_record, maintain, validate, publish, startup_install, startup_status, startup_uninstall, api_describe, api_status, api_outputs_list, api_outputs_inspect, api_config_validate]
   background_rule: "daemon --detach starts the same single-instance worker in a hidden detached Node process."
   machine_output: json
   single_instance: true
+
+manager_integration_api:
+  schema: uci_arena_manager_service_api_v1
+  version: '1.0'
+  transport: cli_json
+  invocation: [api]
+  operations:
+    - describe
+    - status
+    - outputs_list
+    - outputs_inspect
+    - config_validate
+  output_schema: uci_arena_service_output_v1
+  output_kind: opening_book.snapshot
+  rules:
+    - "The installed component manifest is the only discovery authority for the API entrypoint, version, transport, and invocation prefix."
+    - "Manager invokes the service CLI and consumes one JSON response; Book Forge never calls or imports Manager."
+    - "Describe publishes component identity, API compatibility, operations, output kinds, and service-owned schemas."
+    - "Output list and inspect return validated immutable snapshot identity, channel, qualification authority, exact manifest and artifact digests, current-channel state, and controlled absolute paths."
+    - "A supplied cursor may suppress an unchanged output list but never changes output authority."
+    - "The API validates each snapshot through the normal snapshot validator before exposing it and rejects catalog paths outside config.paths.snapshots."
+    - "The API never returns raw catalog rows, SQL paths, source observations, credentials, credential paths, or unvalidated workspace files."
+    - "Manager decides installation and promotion; integration snapshots remain installable but explicitly not strength-qualified."
+    - "Unknown API major versions and unknown operations fail closed."
 
 windows_startup:
   owner: book_forge_cli
   mechanism: per_user_windows_task_scheduler_logon_task
   task_name: UCI Arena Book Forge
   launcher:
-    artifact: packages/background-service-runtime/native/build/Release/uci_arena_service_launcher.exe
+    artifact: native/bin/uci_arena_service_launcher.exe
     pe_subsystem: windows_gui
     node_creation_flags: [CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT]
     stdio: windows_null_device
@@ -306,7 +331,7 @@ linux_startup:
 
 relocatable_install:
   package_root: derived_from_import_meta
-  suite_root: explicit_UCI_ARENA_SUITE_ROOT_or_source_checkout_fallback
+  suite_root: explicit_UCI_ARENA_SUITE_ROOT_or_package_root_development_default
   repository_checkout_required: false
   default_token_file: per_user_config_directory_reference
   rules:

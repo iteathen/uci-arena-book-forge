@@ -1,4 +1,7 @@
 node_modules/
+build/
+dist/
+provider_stage/
 .book-forge/
 *.local.json
 native/build/

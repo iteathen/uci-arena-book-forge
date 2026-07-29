@@ -5,10 +5,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-export const repositoryRoot = path.resolve(packageRoot, '..', '..');
+export const repositoryRoot = packageRoot;
 export const suiteRoot = process.env.UCI_ARENA_SUITE_ROOT?.trim()
   ? path.resolve(process.env.UCI_ARENA_SUITE_ROOT)
-  : repositoryRoot;
+  : packageRoot;
 
 function defaultWorkspace() {
   if (process.platform === 'win32') {
