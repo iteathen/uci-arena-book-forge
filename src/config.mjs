@@ -42,9 +42,9 @@ const defaults = {
     || suiteExecutable('components/stockfish.engine/current/stockfish.exe',
       'components/stockfish.engine/current/stockfish'),
   nativeHelper: path.join(packageRoot, 'native', 'bin',
-    process.platform === 'win32' ? 'book_forge_guard.exe' : 'book_forge_guard'),
+    process.platform === 'win32' ? 'uci_arena_background_guard.exe' : 'uci_arena_background_guard'),
   nativeLauncher: path.join(packageRoot, 'native', 'bin',
-    process.platform === 'win32' ? 'book_forge_launcher.exe' : 'book_forge_launcher'),
+    process.platform === 'win32' ? 'uci_arena_service_launcher.exe' : 'uci_arena_service_launcher'),
   channels: { integration: true, qualified: true },
   ingestion: {
     minimumRating: 2000,

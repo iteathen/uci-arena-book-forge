@@ -14,7 +14,7 @@ import { loadConfig } from '../src/config.mjs';
 import { runCycle, runDaemon } from '../src/daemon.mjs';
 import { discoverInbox, ingestSource, registerInput } from '../src/ingest.mjs';
 import { runMaintenance } from '../src/maintenance.mjs';
-import { NativeResourceHelper } from '../src/native_helper.mjs';
+import { NativeResourceHelper } from '@uci-arena/background-service-runtime/native-resource-helper';
 import { publishSnapshot } from '../src/publisher.mjs';
 import { RESOURCE_WORK_CLASSES, ResourceGovernor } from '../src/resource_governor.mjs';
 import { analyzeObservations, StockfishWorker } from '../src/stockfish.mjs';
@@ -904,7 +904,7 @@ test('optional Windows guard exposes battery, input-idle, and processor-limit te
   t.after(() => rm(config.workspace, { recursive: true, force: true }));
   if (!config.nativeHelperAvailable) return t.skip('native resource guard is not built');
   const probe = await new NativeResourceHelper(config).probe();
-  assert.equal(probe.schema, 'uci_arena_book_forge_native_probe_v1');
+  assert.equal(probe.schema, 'uci_arena_background_service_native_probe_v1');
   assert.equal(typeof probe.on_battery, 'boolean');
   assert.ok(Number.isInteger(probe.input_idle_ms));
   assert.ok(probe.processor_limit_percent >= 0 && probe.processor_limit_percent <= 100);
@@ -971,7 +971,7 @@ test('optional Windows guard applies EcoQoS and uses only proven efficiency CPU 
   });
   t.after(() => { try { child.kill(); } catch {} });
   const profile = await new NativeResourceHelper(config).applyProcessProfile(child.pid, { efficiencyCoreLimit: 2 });
-  assert.equal(profile.schema, 'uci_arena_book_forge_process_profile_v1');
+  assert.equal(profile.schema, 'uci_arena_background_service_process_profile_v1');
   assert.equal(profile.applied, true);
   assert.equal(profile.idle_priority, true);
   assert.equal(typeof profile.eco_qos, 'boolean');
@@ -997,7 +997,7 @@ test('native launcher is a GUI process that runs Node without a console and prop
 
   const { stdout } = await execFileAsync(config.nativeLauncher, ['--probe'], { windowsHide: true, timeout: 5_000 });
   assert.deepEqual(JSON.parse(stdout), {
-    schema: 'uci_arena_book_forge_launcher_probe_v1', windows_gui_subsystem: true, create_no_window: true,
+    schema: 'uci_arena_service_launcher_probe_v1', windows_gui_subsystem: true, create_no_window: true,
     persistent_restart: true, initial_restart_delay_ms: 5_000, maximum_restart_delay_ms: 300_000,
   });
 

@@ -4,8 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
-import { shutdownChildProcessTree } from '../../../arena/lib/gpu_resource_isolation.mjs';
-import { NativeResourceHelper } from './native_helper.mjs';
+import { shutdownChildProcessTree } from '@uci-arena/background-service-runtime/resource-isolation';
+import { NativeResourceHelper } from '@uci-arena/background-service-runtime/native-resource-helper';
 
 const defaultRevocationPollMs = 250;
 

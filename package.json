@@ -1,6 +1,6 @@
 {
   "name": "@uci-arena/book-forge",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,6 +13,7 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@uci-arena/background-service-runtime": "file:../../packages/background-service-runtime",
     "@echecs/zobrist": "1.0.2",
     "chess.js": "1.4.0"
   }

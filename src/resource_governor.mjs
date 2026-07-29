@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import os from 'node:os';
 import { statfs } from 'node:fs/promises';
 import { promisify } from 'node:util';
-import { NativeResourceHelper } from './native_helper.mjs';
+import { NativeResourceHelper } from '@uci-arena/background-service-runtime/native-resource-helper';
 
 const execFileAsync = promisify(execFile);
 const gibibyte = 1024 ** 3;

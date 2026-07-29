@@ -2,9 +2,6 @@
   "schema": "uci_arena_book_forge_config_v1",
   "workspace": "E:/book-forge",
   "policyFile": "policy/strong_rare_v1.policy",
-  "stockfish": "../../third_party/bin/stockfish.exe",
-  "nativeHelper": "native/build/Release/book_forge_guard.exe",
-  "nativeLauncher": "native/build/Release/book_forge_launcher.exe",
   "channels": {
     "integration": true,
     "qualified": true
@@ -32,7 +29,7 @@
     "enabled": true,
     "provider": "lichess_opening_explorer",
     "endpoint": "https://explorer.lichess.org/lichess",
-    "tokenFile": "../../secrets/lichess_bot_token.txt",
+    "tokenFile": "C:/Users/example/AppData/Roaming/UCI Arena/secrets/lichess_bot_token.txt",
     "variant": "standard",
     "speeds": ["rapid", "classical"],
     "ratings": [2000, 2200, 2500],

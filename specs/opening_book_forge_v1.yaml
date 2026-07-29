@@ -11,7 +11,7 @@ meta:
     consumed through the existing UCI knowledge-source file contract.
 
 authority:
-  production_builder: tools/book_forge
+  production_builder: services/book-forge
   runtime_consumer: specs/uci_knowledge_sources_v1.yaml
   rules:
     - "Book Forge never imports engine or UCI runtime source and never mutates a running engine."
@@ -21,7 +21,7 @@ authority:
 
 runtime:
   node_minimum: 24.15.0
-  package_root: tools/book_forge
+  package_root: services/book-forge
   default_workspace_windows: '%LOCALAPPDATA%\UCI Arena\Book Forge'
   default_workspace_linux: '$XDG_STATE_HOME/uci-arena/book-forge'
   portable_workspace_environment: BOOK_FORGE_ROOT
@@ -267,13 +267,13 @@ windows_startup:
   mechanism: per_user_windows_task_scheduler_logon_task
   task_name: UCI Arena Book Forge
   launcher:
-    artifact: tools/book_forge/native/build/Release/book_forge_launcher.exe
+    artifact: packages/background-service-runtime/native/build/Release/uci_arena_service_launcher.exe
     pe_subsystem: windows_gui
     node_creation_flags: [CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT]
     stdio: windows_null_device
     supervision: "The scheduled launcher owns the foreground Node daemon, restarts every unexpected daemon exit after exponential backoff from five seconds through five minutes, and stays alive until Task Scheduler stops the task."
   rules:
-    - "startup install registers the absolute native launcher as the task action and passes absolute current Node, Book Forge CLI, workspace, optional config, and repository working directory paths."
+    - "startup install registers the absolute native launcher as the task action and passes absolute current Node, Book Forge CLI, workspace, optional config, and installed package working-directory paths."
     - "The scheduled action runs a Windows GUI-subsystem launcher which creates the foreground Node daemon with no console window; it must not add a second detach layer."
     - "Closing any interactive terminal cannot deliver console-close or Ctrl-C events to the scheduled Book Forge process tree."
     - "Launcher startup fails closed when the native launcher is unavailable; a daemon failure remains visible through stale/failed daemon heartbeat state while the launcher retries, and a launcher failure remains visible through Task Scheduler exit status."

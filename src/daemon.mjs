@@ -1,6 +1,6 @@
 import { open, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { acquireResourceLease } from '../../../arena/lib/background_resource_lease.mjs';
+import { acquireResourceLease } from '@uci-arena/background-service-runtime/lease';
 import { ExplorerAcquisition } from './acquisition.mjs';
 import { buildSnapshot } from './compiler.mjs';
 import { discoverInbox, ingestSource } from './ingest.mjs';
