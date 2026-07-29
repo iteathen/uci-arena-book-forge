@@ -6,13 +6,13 @@
     "@uci-arena/background-service-runtime": "1.0.0"
   },
   "files": {
-    "background-service-runtime/native/CMakeLists.txt": "62de6f6bb97006d3d928dd5ef5af590df02c3f09b3ddc83955408543191e8bf3",
-    "background-service-runtime/native/uci_arena_background_guard.cpp": "d01d1d3761440c7614cf00dc953cb82bf10807cb085c2c316e03be282bebe37a",
-    "background-service-runtime/native/uci_arena_service_launcher.cpp": "199aeb2bf2d26de9891be51a454a54548acbac0285728193ac1586343bcc884e",
-    "background-service-runtime/package.json": "3f7d6e335d126e393f4559232d975065fc700ed825fcbe88f6c6642613568521",
-    "background-service-runtime/src/background-resource-lease.mjs": "4657d43289133768f95646d82829610a6533373f4df174d3b0d9aff7a9d2b6b3",
-    "background-service-runtime/src/native-resource-helper.mjs": "b436beb0bd85cd2b0183a231a75f669bff4615ed61256d7a82c8f41ac3225654",
-    "background-service-runtime/src/resource-isolation.mjs": "f7ac341367de22122974c2e97da316a22c19aff72ca5851ac0126ae3b478a141",
-    "background-service-runtime/test/resource-isolation.test.mjs": "39aa12cb503e787252b4dfc6e89564c2f65bf8a6abe64777de92f78b76d2902d"
+    "background-service-runtime/native/CMakeLists.txt": "5b622f2edcdd8e78a4b40ef404246c09a34d723c401f904b8fa0edbb81f6967e",
+    "background-service-runtime/native/uci_arena_background_guard.cpp": "90aa018a62e8b91b2e63b94646651e7bc680810844fe98e07a14d1ae0226944d",
+    "background-service-runtime/native/uci_arena_service_launcher.cpp": "98bb2b182490f30baa23af14a05d26847be0ede3f97361e20d34db620d2fa769",
+    "background-service-runtime/package.json": "ea3187d4670a07513b91659d246b8f8ff4cf19ca38e946a91d11ff019b559d47",
+    "background-service-runtime/src/background-resource-lease.mjs": "86154073b51d837e5436ce7e8e430b6c3271b3930b00f2ceb7ee7c4b44d2ea3c",
+    "background-service-runtime/src/native-resource-helper.mjs": "389067df29454d4ca315dcd7eb89507d1107ea45136fc139bcfc5254a7a210c7",
+    "background-service-runtime/src/resource-isolation.mjs": "69c1509a9f44b6da4336bb35059d4a6aec080ba07f6e6f9fc4c11832e997f13e",
+    "background-service-runtime/test/resource-isolation.test.mjs": "e5006c275a8fac8198a9e2b56c20973e4f608533645dcb3654f9908b34b792a0"
   }
 }

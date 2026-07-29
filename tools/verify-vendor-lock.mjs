@@ -15,6 +15,26 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const vendor = path.join(root, "vendor");
 const lockPath = path.join(vendor, "upstream.lock.json");
 
+const TEXT_EXTENSIONS = new Set([
+  ".cpp",
+  ".h",
+  ".json",
+  ".md",
+  ".mjs",
+  ".txt",
+  ".yaml",
+  ".yml",
+]);
+
+export function canonicalVendorBytes(name, bytes) {
+  const basename = path.posix.basename(name);
+  if (basename !== "CMakeLists.txt"
+      && !TEXT_EXTENSIONS.has(path.posix.extname(name))) {
+    return bytes;
+  }
+  return Buffer.from(bytes.toString("utf8").replaceAll("\r\n", "\n"), "utf8");
+}
+
 function walk(directory, relative = "") {
   const rows = [];
   for (const name of readdirSync(directory).sort()) {
@@ -31,7 +51,9 @@ function walk(directory, relative = "") {
 
 const files = Object.fromEntries(walk(vendor).map((name) => [
   name,
-  createHash("sha256").update(readFileSync(path.join(vendor, name))).digest("hex"),
+  createHash("sha256")
+    .update(canonicalVendorBytes(name, readFileSync(path.join(vendor, name))))
+    .digest("hex"),
 ]));
 
 if (process.argv.includes("--write")) {
