@@ -148,7 +148,7 @@ export async function installWindowsStartup(config) {
   }
   const status = await queryWindowsStartup(config);
   if (!status.installed || !status.matchesCurrentConfiguration) throw new Error('Windows accepted the startup task but its registered action does not match Book Forge');
-  const evidence = { schema: 'flashfork_book_forge_startup_v2', taskName: startupTaskName, userSid,
+  const evidence = { schema: 'uci_arena_book_forge_startup_v2', taskName: startupTaskName, userSid,
     action: startupAction(config), workspace: config.workspace, installedAt: new Date().toISOString() };
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
   try {

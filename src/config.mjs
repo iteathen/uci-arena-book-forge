@@ -35,7 +35,7 @@ function suiteExecutable(windowsPath, unixPath) {
 }
 
 const defaults = {
-  schema: 'flashfork_book_forge_config_v1',
+  schema: 'uci_arena_book_forge_config_v1',
   workspace: process.env.BOOK_FORGE_ROOT || defaultWorkspace(),
   policyFile: path.join(packageRoot, 'policy', 'strong_rare_v1.policy'),
   stockfish: process.env.UCI_ARENA_STOCKFISH?.trim()
@@ -93,7 +93,7 @@ const defaults = {
     pauseAvailableMemoryGb: 6,
     courtesyCpuPercent: 20,
     idleCpuPercent: 80,
-    priorityProcessNames: ['flashfork_uci.exe', 'uci_arena.exe', 'msbuild.exe', 'cl.exe'],
+    priorityProcessNames: ['uci_arena_engine.exe', 'msbuild.exe', 'cl.exe'],
   },
   maintenance: {
     intervalDays: 30,
@@ -106,6 +106,14 @@ const defaults = {
     failureBackoffMaximumMs: 300_000,
   },
 };
+
+const configSchemaSuffix = '_book_forge_config_v1';
+
+function compatibleConfigSchema(value) {
+  return typeof value === 'string'
+    && (value === defaults.schema
+      || (value.endsWith(configSchemaSuffix) && value.length > configSchemaSuffix.length));
+}
 
 function merge(base, override) {
   const result = { ...base };
@@ -139,12 +147,13 @@ export async function loadConfig({ configFile, workspace } = {}) {
   if (configFile) {
     const absolute = path.resolve(configFile);
     loaded = JSON.parse(await readFile(absolute, 'utf8'));
-    if (loaded.schema !== defaults.schema) {
+    if (!compatibleConfigSchema(loaded.schema)) {
       throw new Error(`Unsupported Book Forge config schema: ${loaded.schema ?? '<missing>'}`);
     }
     configDirectory = path.dirname(absolute);
   }
   const config = merge(structuredClone(defaults), loaded);
+  config.schema = defaults.schema;
   config.workspace = path.resolve(workspace ?? process.env.BOOK_FORGE_ROOT ?? config.workspace);
   config.configFile = configFile ? path.resolve(configFile) : null;
   config.policyFile = resolveConfiguredPath(config.policyFile, configDirectory);

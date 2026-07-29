@@ -29,6 +29,13 @@ runtime:
     chess_js: 1.4.0
     echecs_zobrist: 1.0.2
   shipped_python_dependency: false
+  schema_identity:
+    config: uci_arena_book_forge_config_v1
+    status: uci_arena_book_forge_status_v2
+    migration:
+      - "Previously persisted config may be admitted only when its schema has the exact Book Forge config/version suffix and all normal field validation passes."
+      - "A migrated config is normalized in memory to the canonical UCI Arena schema and the legacy prefix is never emitted, copied, or used for product discovery."
+      - "Status, startup, fixture, and newly generated configuration output always use the canonical UCI Arena schema."
 
 storage:
   catalog: catalog.sqlite
@@ -220,7 +227,7 @@ resource_governor:
   windows_helper_scope: [job_objects, eco_qos, efficiency_cpu_sets, input_idle, io_priority]
   rules:
     - "Back off quickly and ramp slowly with hysteresis."
-    - "Both flashfork_uci.exe development binaries and uci_arena.exe deployment binaries are priority engine processes; heavy Forge work yields while either is running."
+    - "uci_arena_engine.exe is the priority engine process; heavy Forge work yields while it is running."
     - "Configured priority processes, battery use, thermal throttling, memory pressure, and disk pressure override idle harvesting."
     - "Acquisition requests are abortable and stop within two seconds after resource permission is revoked."
 
@@ -230,7 +237,7 @@ daemon_observability:
   report_retention: last_cycle_only
   phases: [acquisition, ingestion, analysis, publication, maintenance, sleep, recovering]
   public_status_contract:
-    schema: flashfork_book_forge_status_v2
+    schema: uci_arena_book_forge_status_v2
     control_singleton_type: boolean
     control_paused_type: boolean
     rule: >
@@ -352,14 +359,14 @@ phase_specific_resource_permits_2026_07_20:
     - compiler_or_build_process
   rules:
     - "ResourceGovernor returns a typed permit for a requested work class; a generic allowed boolean cannot authorize every phase."
-    - "An active flashfork_uci.exe or uci_arena.exe process downgrades permitted lightweight work to courtesy, permits Stockfish only through background_sip, and continues to block ingestion, qualified publication, and maintenance; neither engine process is by itself a global hard stop."
+    - "An active uci_arena_engine.exe process downgrades permitted lightweight work to courtesy, permits Stockfish only through background_sip, and continues to block ingestion, qualified publication, and maintenance; the engine process is not by itself a global hard stop."
     - "Long-running Stockfish analysis polls its typed permit and, within two seconds of a foreground UCI engine appearing, either proves that the active worker count and native process profile satisfy background_sip or interrupts and cleans up the wider in-flight batch before a later cycle resumes under the bounded profile."
     - "background_sip performs no GPU work, never increases Threads above one per worker, and may not exceed two Stockfish workers or two proven lowest-efficiency-class CPU sets."
     - "Acquisition retains its two-second revocation/abort contract and one-request-at-a-time rate limit."
     - "A running engine retains its loaded immutable snapshot, so a courtesy publication affects only future engines or explicit reloads."
     - "No permit path reads, logs, hashes, or exposes credential contents."
   validation:
-    - "Mocked process/resource states prove acquisition and bounded background_sip analysis advance while either flashfork_uci.exe or uci_arena.exe is present, while ingestion and maintenance do not."
+    - "Mocked process/resource states prove acquisition and bounded background_sip analysis advance while uci_arena_engine.exe is present, while ingestion and maintenance do not."
     - "A blocking Stockfish analysis is interrupted promptly when its resource permit is revoked or its active worker/profile allocation exceeds a newly reduced permit."
     - "Every hard stop blocks and aborts all work classes."
     - "Courtesy operation keeps measured foreground engine slowdown below two percent."

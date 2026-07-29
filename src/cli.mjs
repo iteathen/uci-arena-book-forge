@@ -49,7 +49,7 @@ async function main() {
   const catalog = new Catalog(config);
   try {
     if (command === 'init') {
-      output({ ok: true, schema: 'flashfork_book_forge_init_v1', workspace: config.workspace, status: catalog.status() });
+      output({ ok: true, schema: 'uci_arena_book_forge_init_v1', workspace: config.workspace, status: catalog.status() });
     } else if (command === 'source' && subcommand === 'add') {
       if (!argument && !options.fixture) throw new Error('source add requires a PGN path or --fixture <id>');
       const source = await registerInput(catalog, { filename: argument, fixtureId: options.fixture });

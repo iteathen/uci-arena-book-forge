@@ -76,7 +76,7 @@ function polyglotBytes(records) {
 
 function statsBytes(records, bookBytes) {
   const digest = fnv1a64(bookBytes).toString(16).padStart(16, '0');
-  const lines = [`# flashfork_book_stats_v1 book_fnv1a64=${digest} rows=${records.length}`];
+  const lines = [`# uci_arena_book_stats_v1 book_fnv1a64=${digest} rows=${records.length}`];
   for (const record of records) {
     lines.push([keyHex(record.key), moveHex(record.rawMove), record.games, record.wins, record.draws, record.losses].join('\t'));
   }
@@ -222,7 +222,7 @@ export async function buildSnapshot(catalog, config, channel = 'integration') {
     'strong_rare_v1.policy': sha256(policyBytes), 'evaluation.audit.jsonl': sha256(audit),
   };
   const manifest = {
-    schema: 'flashfork_book_snapshot_v1', snapshot_id: snapshotId, channel,
+    schema: 'uci_arena_book_snapshot_v1', snapshot_id: snapshotId, channel,
     record_count: records.length, includes_fixture: sourceEvidence.some((source) => source.fixture),
     qualified: channel === 'qualified', artifacts: artifactDigests,
     qualification_metrics: metrics,
@@ -262,7 +262,7 @@ export async function validateSnapshot(directory) {
   const manifestPath = path.join(directory, 'snapshot.manifest.json');
   const manifestBytes = await readFile(manifestPath);
   const manifest = JSON.parse(manifestBytes.toString('utf8'));
-  if (manifest.schema !== 'flashfork_book_snapshot_v1') throw new Error('Unsupported snapshot manifest schema');
+  if (manifest.schema !== 'uci_arena_book_snapshot_v1') throw new Error('Unsupported snapshot manifest schema');
   if (!['integration', 'qualified'].includes(manifest.channel) || manifest.qualified !== (manifest.channel === 'qualified')) throw new Error('Invalid snapshot channel metadata');
   if (!Array.isArray(manifest.source_evidence)) throw new Error('Snapshot source evidence is missing');
   if (!manifest.corpus_filter || typeof manifest.corpus_filter !== 'object') throw new Error('Snapshot corpus filter evidence is missing');
@@ -283,7 +283,7 @@ export async function validateSnapshot(directory) {
   if (book.length % 16 !== 0 || book.length / 16 !== manifest.record_count) throw new Error('Invalid Polyglot record count');
   const lines = stats.toString('utf8').trimEnd().split(/\r?\n/);
   const expectedFnv = fnv1a64(book).toString(16).padStart(16, '0');
-  if (lines[0] !== `# flashfork_book_stats_v1 book_fnv1a64=${expectedFnv} rows=${manifest.record_count}`) throw new Error('Invalid stats header');
+  if (lines[0] !== `# uci_arena_book_stats_v1 book_fnv1a64=${expectedFnv} rows=${manifest.record_count}`) throw new Error('Invalid stats header');
   if (lines.length - 1 !== manifest.record_count) throw new Error('Stats row count mismatch');
   const auditLines = audit.length ? audit.toString('utf8').trimEnd().split(/\r?\n/).map(JSON.parse) : [];
   if (auditLines.length !== manifest.record_count) throw new Error('Audit row count mismatch');

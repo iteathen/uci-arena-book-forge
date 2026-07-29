@@ -145,7 +145,7 @@ function cohortRecord(map, position, move, cohort, outcome) {
 
 async function ingestFixture(catalog, source) {
   const fixture = JSON.parse(await readFile(source.source_path, 'utf8'));
-  if (fixture.schema !== 'flashfork_book_forge_fixture_v1' || fixture.qualification !== 'integration_only') {
+  if (fixture.schema !== 'uci_arena_book_forge_fixture_v1' || fixture.qualification !== 'integration_only') {
     throw new Error(`Invalid integration fixture: ${source.source_path}`);
   }
   const records = fixture.observations.map((entry) => {

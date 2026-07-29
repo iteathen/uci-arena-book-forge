@@ -59,7 +59,7 @@ std::wstring child_command_line(const std::vector<std::wstring>& arguments, std:
 
 void write_probe() {
     constexpr std::string_view message =
-        "{\"schema\":\"flashfork_book_forge_launcher_probe_v1\","
+        "{\"schema\":\"uci_arena_book_forge_launcher_probe_v1\","
         "\"windows_gui_subsystem\":true,\"create_no_window\":true,"
         "\"persistent_restart\":true,\"initial_restart_delay_ms\":5000,"
         "\"maximum_restart_delay_ms\":300000}\n";

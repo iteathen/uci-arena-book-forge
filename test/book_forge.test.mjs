@@ -134,18 +134,23 @@ test('catalog schema three migrates acquisition authority columns without losing
   assert.equal(catalog.database.prepare("SELECT value FROM metadata WHERE key='schema_version'").get().value, '4');
 });
 
-test('configuration copies defaults and forbids redirecting the credential header', async (t) => {
+test('configuration normalizes prior schema prefixes and forbids redirecting the credential header', async (t) => {
   const first = await workspace(t);
   first.acquisition.resourcePollMs = 10;
   const second = await loadConfig({ workspace: first.workspace });
   assert.equal(second.acquisition.resourcePollMs, 1_000);
-  assert.deepEqual(second.resources.priorityProcessNames.slice(0, 2), [
-    'flashfork_uci.exe',
-    'uci_arena.exe',
+  assert.deepEqual(second.resources.priorityProcessNames.slice(0, 1), [
+    'uci_arena_engine.exe',
   ]);
+  const migratedFilename = path.join(first.workspace, 'migrated.config.json');
+  await writeFile(migratedFilename, JSON.stringify({
+    schema: 'previous_product_book_forge_config_v1',
+  }));
+  const migrated = await loadConfig({ configFile: migratedFilename, workspace: first.workspace });
+  assert.equal(migrated.schema, 'uci_arena_book_forge_config_v1');
   const filename = path.join(first.workspace, 'unsafe.config.json');
   await writeFile(filename, JSON.stringify({
-    schema: 'flashfork_book_forge_config_v1', acquisition: { endpoint: 'https://example.com/lichess' },
+    schema: 'uci_arena_book_forge_config_v1', acquisition: { endpoint: 'https://example.com/lichess' },
   }));
   await assert.rejects(loadConfig({ configFile: filename, workspace: first.workspace }), /acquisition configuration/);
   t.after(() => rm(first.workspace, { recursive: true, force: true }));
@@ -271,7 +276,7 @@ test('Book Forge status exposes bounded daemon heartbeat and acquisition telemet
   catalog.updateDaemonState({ pid: 123, phase: 'acquisition', heartbeat_at: new Date().toISOString(),
     last_report: { payload: 'x'.repeat(100_000) } });
   const status = catalog.status();
-  assert.equal(status.schema, 'flashfork_book_forge_status_v2');
+  assert.equal(status.schema, 'uci_arena_book_forge_status_v2');
   assert.equal(status.control.singleton, true);
   assert.equal(status.control.paused, false);
   assert.equal(status.daemon.pid, 123);
@@ -593,7 +598,7 @@ test('resource governor permits bounded background-sip analysis while the engine
   config.nativeHelperAvailable = true;
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
-  const governor = mockedResourceGovernor(config, catalog, { runningProcesses: ['uci_arena.exe'] });
+  const governor = mockedResourceGovernor(config, catalog, { runningProcesses: ['uci_arena_engine.exe'] });
   t.after(() => governor.close());
 
   await assert.rejects(governor.permit(), /Unknown Book Forge resource work class/);
@@ -611,7 +616,7 @@ test('resource governor permits bounded background-sip analysis while the engine
   assert.equal(analysis.workerLimit, 2);
   assert.equal(analysis.dutyCyclePercent, 50);
   assert.equal(analysis.efficiencyCoreLimit, 2);
-  assert.match(analysis.reason, /foreground UCI engine is running \(uci_arena\.exe\)/);
+  assert.match(analysis.reason, /foreground UCI engine is running \(uci_arena_engine\.exe\)/);
   config.nativeHelperAvailable = false;
   const portableFallback = await governor.permit(RESOURCE_WORK_CLASSES.STOCKFISH_ANALYSIS);
   assert.equal(portableFallback.mode, 'background_sip');
@@ -678,7 +683,7 @@ test('Stockfish analysis is interrupted promptly when a foreground engine appear
     if (permitCalls <= 2) return { allowed: true, workerLimit: 1, mode: 'idle_harvest', dutyCyclePercent: 100 };
     return {
       allowed: true, workerLimit: 1, mode: 'background_sip', dutyCyclePercent: 50,
-      reason: 'foreground UCI engine is running (uci_arena.exe)',
+      reason: 'foreground UCI engine is running (uci_arena_engine.exe)',
     };
   } };
   let closed = false;
@@ -695,7 +700,7 @@ test('Stockfish analysis is interrupted promptly when a foreground engine appear
     { workerFactory: () => worker, revocationPollMs: 10 });
   assert.equal(report.interrupted, true);
   assert.equal(report.skipped, false);
-  assert.match(report.reason, /uci_arena\.exe/);
+  assert.match(report.reason, /uci_arena_engine\.exe/);
   assert.ok(performance.now() - started < 1_000);
   assert.equal(closed, true);
 });
@@ -703,7 +708,7 @@ test('Stockfish analysis is interrupted promptly when a foreground engine appear
 test('every hard resource stop rejects every work class', async (t) => {
   const config = await workspace(t);
   config.resources.minimumFreeWorkspaceGb = 75;
-  config.resources.priorityProcessNames = ['flashfork_uci.exe', 'msbuild.exe', 'cl.exe'];
+  config.resources.priorityProcessNames = ['uci_arena_engine.exe', 'msbuild.exe', 'cl.exe'];
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
   const states = [
@@ -735,13 +740,13 @@ test('every hard resource stop rejects every work class', async (t) => {
 
 test('daemon advances acquisition, integration publication, and bounded analysis with a running engine', async (t) => {
   const config = await workspace(t);
-  config.resources.priorityProcessNames = ['flashfork_uci.exe', 'msbuild.exe', 'cl.exe'];
+  config.resources.priorityProcessNames = ['uci_arena_engine.exe', 'msbuild.exe', 'cl.exe'];
   config.channels.qualified = false;
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
   const source = await registerInput(catalog, { fixtureId: 'bootstrap_v1' });
   await ingestSource(catalog, source, config);
-  const governor = mockedResourceGovernor(config, catalog, { runningProcesses: ['flashfork_uci.exe'] });
+  const governor = mockedResourceGovernor(config, catalog, { runningProcesses: ['uci_arena_engine.exe'] });
   t.after(() => governor.close());
   const phases = [];
   const acquisition = {
@@ -761,7 +766,7 @@ test('daemon advances acquisition, integration publication, and bounded analysis
   assert.equal(report.analysis.positions, 1);
   assert.equal(report.analysis.resourceMode, 'background_sip');
   assert.equal(report.maintenance.skipped, true);
-  assert.match(report.maintenance.reason, /foreground UCI engine is running \(flashfork_uci\.exe\)/);
+  assert.match(report.maintenance.reason, /foreground UCI engine is running \(uci_arena_engine\.exe\)/);
   assert.ok(phases.some(({ phase, mode }) => phase === 'publication' && mode === 'courtesy'));
   assert.ok(phases.some(({ phase, mode }) => phase === 'analysis' && mode === 'background_sip'));
 });
@@ -868,7 +873,7 @@ test('optional Windows guard exposes battery, input-idle, and processor-limit te
   t.after(() => rm(config.workspace, { recursive: true, force: true }));
   if (!config.nativeHelperAvailable) return t.skip('native resource guard is not built');
   const probe = await new NativeResourceHelper(config).probe();
-  assert.equal(probe.schema, 'flashfork_book_forge_native_probe_v1');
+  assert.equal(probe.schema, 'uci_arena_book_forge_native_probe_v1');
   assert.equal(typeof probe.on_battery, 'boolean');
   assert.ok(Number.isInteger(probe.input_idle_ms));
   assert.ok(probe.processor_limit_percent >= 0 && probe.processor_limit_percent <= 100);
@@ -935,7 +940,7 @@ test('optional Windows guard applies EcoQoS and uses only proven efficiency CPU 
   });
   t.after(() => { try { child.kill(); } catch {} });
   const profile = await new NativeResourceHelper(config).applyProcessProfile(child.pid, { efficiencyCoreLimit: 2 });
-  assert.equal(profile.schema, 'flashfork_book_forge_process_profile_v1');
+  assert.equal(profile.schema, 'uci_arena_book_forge_process_profile_v1');
   assert.equal(profile.applied, true);
   assert.equal(profile.idle_priority, true);
   assert.equal(typeof profile.eco_qos, 'boolean');
@@ -961,7 +966,7 @@ test('native launcher is a GUI process that runs Node without a console and prop
 
   const { stdout } = await execFileAsync(config.nativeLauncher, ['--probe'], { windowsHide: true, timeout: 5_000 });
   assert.deepEqual(JSON.parse(stdout), {
-    schema: 'flashfork_book_forge_launcher_probe_v1', windows_gui_subsystem: true, create_no_window: true,
+    schema: 'uci_arena_book_forge_launcher_probe_v1', windows_gui_subsystem: true, create_no_window: true,
     persistent_restart: true, initial_restart_delay_ms: 5_000, maximum_restart_delay_ms: 300_000,
   });
 

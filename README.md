@@ -59,8 +59,8 @@ and end its scheduled instance, use `startup uninstall`. `daemon --detach`
 remains available for temporary sessions that are not managed by Windows.
 
 `pause` and `resume` are durable control commands. The daemon runs at low OS
-priority and uses phase-specific resource permits. While `flashfork_uci.exe` or
-`uci_arena.exe` is running, low-rate Explorer acquisition and bounded integration
+priority and uses phase-specific resource permits. While `uci_arena_engine.exe`
+is running, low-rate Explorer acquisition and bounded integration
 publication stay enabled in courtesy mode. Stockfish analysis continues in
 `background_sip`: no more than two one-thread workers, restricted to two CPU
 sets in Windows' lowest reported efficiency class, tagged EcoQoS/idle priority,

@@ -6,7 +6,7 @@ import { NativeResourceHelper } from './native_helper.mjs';
 
 const execFileAsync = promisify(execFile);
 const gibibyte = 1024 ** 3;
-const engineProcessNames = new Set(['flashfork_uci.exe', 'uci_arena.exe']);
+const engineProcessNames = new Set(['uci_arena_engine.exe']);
 
 export const RESOURCE_WORK_CLASSES = Object.freeze({
   ACQUISITION: 'acquisition',

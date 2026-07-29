@@ -26,7 +26,7 @@ export class NativeResourceHelper {
     try {
       const { stdout } = await execFileAsync(this.config.nativeHelper, ['--probe'], { windowsHide: true, timeout: 1_000 });
       const value = JSON.parse(stdout);
-      return value.schema === 'flashfork_book_forge_native_probe_v1' ? value : null;
+      return value.schema === 'uci_arena_book_forge_native_probe_v1' ? value : null;
     } catch {
       return null;
     }
@@ -35,7 +35,7 @@ export class NativeResourceHelper {
   async applyProcessProfile(processId, { efficiencyCoreLimit = 0 } = {}) {
     if (!this.config.nativeHelperAvailable) {
       return {
-        schema: 'flashfork_book_forge_process_profile_v1', applied: false,
+        schema: 'uci_arena_book_forge_process_profile_v1', applied: false,
         eco_qos: false, cpu_set_applied: false, reason: 'native helper unavailable',
       };
     }
@@ -48,11 +48,11 @@ export class NativeResourceHelper {
         '--apply-process-profile', String(processId), '--efficiency-cores', String(efficiencyCoreLimit),
       ], { windowsHide: true, timeout: 2_000 });
       const value = JSON.parse(stdout);
-      if (value.schema !== 'flashfork_book_forge_process_profile_v1') throw new Error('unexpected helper response');
+      if (value.schema !== 'uci_arena_book_forge_process_profile_v1') throw new Error('unexpected helper response');
       return value;
     } catch (error) {
       return {
-        schema: 'flashfork_book_forge_process_profile_v1', applied: false,
+        schema: 'uci_arena_book_forge_process_profile_v1', applied: false,
         eco_qos: false, cpu_set_applied: false,
         reason: String(error?.message ?? error).slice(0, 256),
       };
