@@ -10,6 +10,19 @@ repository:
   source_root: .
   upstream_authority: iteathen/UCI_Arena
 
+github_automation:
+  automatic_ci: disabled
+  forbidden_automatic_triggers: [pull_request, push, merge_group, schedule]
+  validation_authority: local_before_pull_request_and_merge
+  manual_release:
+    workflow: .github/workflows/component-release.yml
+    trigger: workflow_dispatch_only
+  rules:
+    - Pull requests and branch pushes never start GitHub-hosted validation.
+    - Exact local check commands and outcomes are recorded before merge.
+    - Component release and provenance run only after explicit operator dispatch
+      and are not automatically required pull-request status checks.
+
 contracts:
   component_ids: [book_forge.service, opening_book.standard]
   installed_cli: services/book-forge/src/cli.mjs

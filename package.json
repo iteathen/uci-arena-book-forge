@@ -11,9 +11,10 @@
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
+    "check:automation": "node tools/check-github-automation.mjs",
     "check:boundary": "node tools/repository-boundary-check.mjs",
     "check:vendor": "node tools/verify-vendor-lock.mjs",
-    "check": "npm run check:vendor && npm run check:boundary && npm test"
+    "check": "npm run check:vendor && npm run check:boundary && npm run check:automation && npm test"
   },
   "dependencies": {
     "@uci-arena/background-service-runtime": "file:vendor/background-service-runtime",
