@@ -21,8 +21,10 @@ export function maintenanceDue(catalog, config) {
 }
 
 export async function runMaintenance(catalog, config, { force = false } = {}) {
-  if (!force && !maintenanceDue(catalog, config)) return { skipped: true, reason: 'interval_not_due' };
-  const compacted = catalog.compactOldObservations(cutoffMonth(config.maintenance.detailedCohortRetentionMonths));
+  const compactionDue = force || maintenanceDue(catalog, config);
+  const compacted = compactionDue
+    ? catalog.compactOldObservations(cutoffMonth(config.maintenance.detailedCohortRetentionMonths))
+    : null;
   const currentIds = new Set(['integration', 'qualified'].map((channel) => catalog.channel(channel)?.snapshot_id).filter(Boolean));
   const keptByChannel = new Map();
   let snapshotsPruned = 0;
@@ -51,6 +53,14 @@ export async function runMaintenance(catalog, config, { force = false } = {}) {
     }
   }
   const completedAt = new Date().toISOString();
-  catalog.setMetadata('last_maintenance_at', completedAt);
-  return { skipped: false, completedAt, compacted, snapshotsPruned, historyPruned };
+  if (compactionDue) catalog.setMetadata('last_maintenance_at', completedAt);
+  const skipped = !compactionDue && snapshotsPruned === 0 && historyPruned === 0;
+  return {
+    skipped,
+    reason: skipped ? 'interval_not_due' : undefined,
+    completedAt,
+    compacted,
+    snapshotsPruned,
+    historyPruned,
+  };
 }

@@ -110,7 +110,7 @@ async function outputRecord(catalog, config, row) {
 
 async function outputs(catalog, config) {
   const records = [];
-  for (const row of catalog.snapshotRows()) {
+  for (const row of catalog.currentSnapshotRows()) {
     records.push(await outputRecord(catalog, config, row));
   }
   return records;
@@ -122,6 +122,16 @@ function outputCursor(records) {
     manifest_sha256: record.artifact.manifest_sha256,
     current: record.state.current,
   })))).digest('hex');
+}
+
+function catalogOutputCursor(catalog) {
+  return createHash('sha256').update(JSON.stringify(
+    catalog.currentSnapshotRows().map((row) => ({
+      output_id: row.id,
+      manifest_sha256: row.manifest_sha256,
+      current: true,
+    })),
+  )).digest('hex');
 }
 
 export function describeApi() {
@@ -144,12 +154,23 @@ export async function listOutputsApi(catalog, config, cursor = '') {
   if (cursor && !/^[0-9a-f]{64}$/u.test(cursor)) {
     throw new Error('Book Forge output cursor is malformed');
   }
+  const catalogCursor = catalogOutputCursor(catalog);
+  if (cursor === catalogCursor) {
+    return envelope('outputs_list', {
+      cursor: catalogCursor,
+      unchanged: true,
+      outputs: [],
+    });
+  }
   const records = await outputs(catalog, config);
   const currentCursor = outputCursor(records);
+  if (currentCursor !== catalogCursor) {
+    throw new Error('Book Forge output cursor drifted during validation');
+  }
   return envelope('outputs_list', {
     cursor: currentCursor,
-    unchanged: cursor === currentCursor,
-    outputs: cursor === currentCursor ? [] : records,
+    unchanged: false,
+    outputs: records,
   });
 }
 
@@ -157,10 +178,9 @@ export async function inspectOutputApi(catalog, config, outputId) {
   if (!/^(?:integration|qualified)-[0-9a-f]{20}$/u.test(outputId ?? '')) {
     throw new Error('Book Forge output id is malformed');
   }
-  const records = await outputs(catalog, config);
-  const record = records.find((candidate) => candidate.output_id === outputId);
-  if (!record) throw new Error(`Book Forge output does not exist: ${outputId}`);
-  return envelope('outputs_inspect', { output: record });
+  const row = catalog.snapshot(outputId);
+  if (!row) throw new Error(`Book Forge output does not exist: ${outputId}`);
+  return envelope('outputs_inspect', { output: await outputRecord(catalog, config, row) });
 }
 
 export function validateConfigApi(config) {

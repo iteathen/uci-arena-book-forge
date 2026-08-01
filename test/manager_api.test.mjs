@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -71,10 +72,62 @@ test('Manager API rejects a catalog output path outside the snapshot root', asyn
     qualified: false,
     manifestSha256: '0'.repeat(64),
   });
+  catalog.setChannel(
+    'integration',
+    'integration-0123456789abcdefabcd',
+    path.dirname(config.paths.snapshots),
+  );
   await assert.rejects(
     listOutputsApi(catalog, config),
     /escapes the declared snapshot root/,
   );
+});
+
+test('Manager API discovery never traverses retained historical snapshots', async (t) => {
+  const { catalog, config } = await fixture(t);
+  catalog.addSnapshot({
+    id: 'integration-0123456789abcdefabcd',
+    channel: 'integration',
+    directory: path.dirname(config.paths.snapshots),
+    recordCount: 1,
+    includesFixture: true,
+    qualified: false,
+    manifestSha256: '0'.repeat(64),
+  });
+
+  const listed = await listOutputsApi(catalog, config);
+
+  assert.deepEqual(listed.payload.outputs, []);
+  await assert.rejects(
+    inspectOutputApi(catalog, config, 'integration-0123456789abcdefabcd'),
+    /escapes the declared snapshot root/,
+  );
+});
+
+test('Manager API accepts an unchanged cursor without reopening snapshot files', async (t) => {
+  const { catalog, config } = await fixture(t);
+  const snapshot = {
+    id: 'integration-0123456789abcdefabcd',
+    channel: 'integration',
+    directory: path.dirname(config.paths.snapshots),
+    recordCount: 1,
+    includesFixture: true,
+    qualified: false,
+    manifestSha256: '0'.repeat(64),
+  };
+  catalog.addSnapshot(snapshot);
+  catalog.setChannel(snapshot.channel, snapshot.id, snapshot.directory);
+  const cursor = createHash('sha256').update(JSON.stringify([{
+    output_id: snapshot.id,
+    manifest_sha256: snapshot.manifestSha256,
+    current: true,
+  }])).digest('hex');
+
+  const unchanged = await listOutputsApi(catalog, config, cursor);
+
+  assert.equal(unchanged.payload.unchanged, true);
+  assert.equal(unchanged.payload.cursor, cursor);
+  assert.deepEqual(unchanged.payload.outputs, []);
 });
 
 test('provider definition advertises the same Manager API contract', async () => {

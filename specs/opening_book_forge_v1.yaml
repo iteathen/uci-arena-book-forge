@@ -204,6 +204,7 @@ bounded_growth:
     - "Compact old observation cohorts without losing source provenance."
     - "Retain compact retired evidence while deleting obsolete PV payloads."
     - "Apply entry/removal hysteresis and re-evaluate stale high-value moves before retirement."
+    - "Snapshot and publication-history retention is enforced on every maintenance pass even when monthly cohort compaction is not due, so catalog discovery and disk use cannot grow for a full interval."
 
 resource_governor:
   modes: [paused, courtesy, background_sip, idle_harvest, backoff]
@@ -286,6 +287,10 @@ manager_integration_api:
     - "The API never returns raw catalog rows, SQL paths, source observations, credentials, credential paths, or unvalidated workspace files."
     - "Manager decides installation and promotion; integration snapshots remain installable but explicitly not strength-qualified."
     - "Unknown API major versions and unknown operations fail closed."
+    - "Output list advertises at most the one current immutable snapshot for each channel; retained historical catalog rows are available only through exact output inspection and are never traversed during discovery."
+    - "The output cursor is derived only from catalog-owned current-channel snapshot ids and manifest digests."
+    - "When the supplied cursor exactly matches current catalog state, outputs list returns unchanged without reopening or rehashing immutable snapshot artifacts; a missing or changed cursor still performs normal validation on every current snapshot before returning it."
+    - "Output inspection resolves and validates only the exact requested snapshot; its latency never grows with retained catalog history."
 
 windows_startup:
   owner: book_forge_cli

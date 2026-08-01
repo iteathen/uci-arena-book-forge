@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -878,6 +878,41 @@ test('monthly maintenance compacts old cohorts idempotently while retaining sour
   assert.equal(catalog.aggregateObservations({ includeFixtures: false }).length, 0);
   catalog.setSourceLifecycle(source.id, 'restored');
   assert.equal(catalog.aggregateObservations({ includeFixtures: false })[0].games, 40);
+});
+
+test('maintenance enforces snapshot retention when monthly compaction is not due', async (t) => {
+  const config = await workspace(t);
+  config.maintenance.snapshotVersionsPerChannel = 4;
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const directories = [];
+  for (let index = 0; index < 6; index += 1) {
+    const id = `integration-${index.toString(16).padStart(20, '0')}`;
+    const directory = path.join(config.paths.snapshots, id);
+    await mkdir(directory, { recursive: true });
+    directories.push(directory);
+    catalog.addSnapshot({
+      id,
+      channel: 'integration',
+      directory,
+      recordCount: 1,
+      includesFixture: false,
+      qualified: false,
+      manifestSha256: index.toString(16).repeat(64).slice(0, 64),
+    });
+    if (index === 5) catalog.setChannel('integration', id, directory);
+  }
+  catalog.setMetadata('last_maintenance_at', new Date().toISOString());
+
+  const result = await runMaintenance(catalog, config);
+
+  assert.equal(result.skipped, false);
+  assert.equal(result.compacted, null);
+  assert.equal(result.snapshotsPruned, 2);
+  assert.equal(catalog.snapshotRows().length, 4);
+  assert.equal(catalog.channel('integration').snapshot_id, 'integration-00000000000000000005');
+  await assert.rejects(stat(directories[0]), /ENOENT/);
+  await assert.rejects(stat(directories[1]), /ENOENT/);
 });
 
 test('configured Stockfish passes persistent UCI interrogation and returns candidate analysis', async (t) => {

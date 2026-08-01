@@ -564,7 +564,17 @@ export class Catalog {
 
   channel(channel) { return this.database.prepare('SELECT * FROM channels WHERE channel=?').get(channel); }
 
+  snapshot(id) { return this.database.prepare('SELECT * FROM snapshots WHERE id=?').get(id); }
+
   snapshotRows() { return this.database.prepare('SELECT * FROM snapshots ORDER BY channel,created_at DESC,id DESC').all(); }
+
+  currentSnapshotRows() {
+    return this.database.prepare(`
+      SELECT s.* FROM channels c
+      JOIN snapshots s ON s.id=c.snapshot_id
+      ORDER BY s.channel,s.id
+    `).all();
+  }
 
   deleteSnapshot(id) {
     if (this.database.prepare('SELECT 1 FROM channels WHERE snapshot_id=?').get(id)) throw new Error(`Cannot delete current snapshot ${id}`);
