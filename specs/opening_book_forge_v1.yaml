@@ -280,6 +280,8 @@ manager_integration_api:
   rules:
     - "The installed component manifest is the only discovery authority for the API entrypoint, version, transport, and invocation prefix."
     - "Manager invokes the service CLI and consumes one JSON response; Book Forge never calls or imports Manager."
+    - "The canonical output-inspection invocation is api outputs inspect --id OUTPUT_ID. The output id is a named typed argument, never inferred from a flag name or an unrelated positional value."
+    - "Every failed API invocation reports the declared operation identifier, including outputs_inspect, independently of option ordering."
     - "Describe publishes component identity, API compatibility, operations, output kinds, and service-owned schemas."
     - "Output list and inspect return validated immutable snapshot identity, channel, qualification authority, exact manifest and artifact digests, current-channel state, and controlled absolute paths."
     - "A supplied cursor may suppress an unchanged output list but never changes output authority."
