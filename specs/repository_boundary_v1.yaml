@@ -8,7 +8,7 @@ repository:
   canonical: iteathen/uci-arena-book-forge
   visibility: private
   source_root: .
-  upstream_authority: iteathen/UCI_Arena
+  suite_architecture_authority: iteathen/uci-arena-installer
 
 github_automation:
   automatic_ci: disabled
@@ -39,7 +39,8 @@ rules:
   - Vendored upstream packages are regular files and match every digest in the upstream lock.
   - Installed layout, workspace roots, schemas, startup identities, and component ids remain stable.
   - UCI Arena validates snapshots as a consumer but does not build Book Forge releases.
-  - UCI Arena Manager remains the only suite composition and promotion authority.
+  - UCI Arena Installer is the only suite composition, assembly, and promotion
+    authority; Manager owns orchestration of components after installation.
   - Manager discovers the API through arena-component.json and never opens the
     Book Forge catalog, scans the workspace, or infers artifact meaning from
     filenames.

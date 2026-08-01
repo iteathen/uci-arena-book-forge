@@ -1,0 +1,80 @@
+meta:
+  spec_id: book_forge_suite_lego_boundaries_v1
+  version: 1
+  status: active
+  owner: governance
+  purpose: >
+    Make the canonical UCI Arena complete-suite architecture enforceable at
+    the Book Forge repository boundary.
+
+authority:
+  canonical_document:
+    repository: iteathen/uci-arena-installer
+    path: docs/architecture/UCI_ARENA_COMPLETE_LEGO_ARCHITECTURE.md
+    url: https://github.com/iteathen/uci-arena-installer/blob/main/docs/architecture/UCI_ARENA_COMPLETE_LEGO_ARCHITECTURE.md
+  local_companion_specs:
+    - specs/00_READ_FIRST.yaml
+    - specs/repository_boundary_v1.yaml
+    - specs/opening_book_forge_v1.yaml
+  rule: >
+    Detailed Book Forge specifications remain authoritative for provider
+    behavior when they do not violate the canonical suite ownership boundary.
+
+repository_role:
+  repository: iteathen/uci-arena-book-forge
+  product_role: opening_book_production_provider
+  owns:
+    - source_acquisition_and_lichess_explorer_integration
+    - pgn_ingestion_and_durable_observations
+    - frontier_selection_and_stockfish_qualification
+    - overlap_authority
+    - snapshot_generation_and_book_compilation
+    - bounded_retention_and_immutable_publication
+    - provider_startup_health_status_configuration_and_persistence
+    - book_artifact_component_manifests_and_provenance
+  must_not_own:
+    - engine_opening_book_lookup_or_move_selection
+    - chess_search_or_legality
+    - manager_control_plane_behavior
+    - evidence_service_scheduling_or_datasets
+    - lichess_bot_behavior_or_account_state
+    - suite_installation_or_release_composition
+
+mandatory_boundaries:
+  - "Book Forge publishes immutable opening-book artifacts through a declared contract; the engine consumes the artifact without knowing how it was acquired, qualified, or compiled."
+  - "Runtime engines and qualification helpers are explicit typed dependencies and are never discovered through sibling source trees."
+  - "Book Forge owns observation, qualification, snapshot, retention, configuration, health, and persistence semantics; Manager projects and controls them only through the published service contract."
+  - "Manager never imports Book Forge source, opens its catalog, scans its workspace, or infers artifact meaning from filenames."
+  - "Installer owns suite composition, artifact validation, deployment, upgrade, repair, and rollback; Book Forge publishes its immutable artifact and component manifest."
+  - "Repositories exchange versioned contracts and immutable release artifacts and never import one another's internal source trees."
+  - "Credential contents remain provider-private and operator-owned; only a credential-file path may cross configuration boundaries."
+  - "Book Forge remains independently buildable, testable, versioned, installable, upgradable, removable, and useful without Manager availability."
+
+published_contract:
+  required:
+    - component_manifest
+    - service_contract
+    - configuration_schema
+    - status_schema
+    - output_artifact_schema
+    - version_and_compatibility
+    - entrypoint_and_startup_contract
+    - health_checks
+    - owned_preserved_generated_and_disposable_paths
+    - checksums_sbom_test_receipt_and_signed_provenance
+
+substitution_acceptance:
+  required:
+    - "A clean build succeeds without Engine, Manager, Evidence Service, Lichess Bot, or Installer source checkouts."
+    - "A conforming Manager consumes Book Forge status, configuration validation, controls, and outputs only through the published contract."
+    - "A conforming engine consumes a published book snapshot without Book Forge source or private metadata."
+    - "The Installer can add, remove, repair, or upgrade Book Forge from its manifest without product-specific installer control flow."
+    - "Unknown contract major versions, component substitution, path escape, and invalid artifact identity fail closed."
+
+change_gate:
+  questions:
+    - "Is this opening-book production behavior owned by Book Forge?"
+    - "Does another repository need only a published contract or artifact rather than provider internals?"
+    - "Can Book Forge change acquisition or qualification without changing engine or Manager internals?"
+    - "Can a conforming consumer replace its adapter without Book Forge changes?"
+    - "Does the change preserve isolated build, persistence, and immutable publication guarantees?"
