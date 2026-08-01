@@ -37,6 +37,13 @@ function cleanCatalog(t, catalog, config) {
   });
 }
 
+async function isolatedHeavyLease() {
+  return {
+    heartbeat() {},
+    release() {},
+  };
+}
+
 function mockedResourceGovernor(config, catalog, {
   availableMemoryGb = 64,
   freeWorkspaceGb = 1_024,
@@ -417,6 +424,7 @@ test('a transient Stockfish failure is isolated to analysis and the cycle comple
     undefined,
     false,
     async () => { throw new Error('Timed out waiting for Stockfish after 30000 ms'); },
+    isolatedHeavyLease,
   );
 
   assert.equal(report.analysis.positions, 0);
@@ -791,7 +799,8 @@ test('daemon advances acquisition, integration publication, and bounded analysis
 
   const report = await runCycle(catalog, config, governor, acquisition,
     (phase, mode) => phases.push({ phase, mode }), 1, false,
-    async () => ({ positions: 1, moves: 2, skipped: false, resourceMode: 'background_sip' }));
+    async () => ({ positions: 1, moves: 2, skipped: false, resourceMode: 'background_sip' }),
+    isolatedHeavyLease);
   assert.equal(report.acquisition.requests, 1);
   assert.ok(report.integration?.snapshotId);
   assert.equal(report.analysis.positions, 1);

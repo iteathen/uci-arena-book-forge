@@ -176,3 +176,32 @@ test('installed CLI API works from an unrelated working directory', async (t) =>
   assert.equal(response.operation, 'describe');
   assert.equal(response.ok, true);
 });
+
+test('installed CLI output inspection accepts the canonical named id', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'book-forge-manager-inspect-'));
+  const cwd = await mkdtemp(path.join(os.tmpdir(), 'book-forge-manager-cwd-'));
+  t.after(() => Promise.all([
+    rm(root, { recursive: true, force: true }),
+    rm(cwd, { recursive: true, force: true }),
+  ]));
+  const outputId = 'integration-0123456789abcdefabcd';
+  await assert.rejects(
+    execFileAsync(process.execPath, [
+      path.resolve('src/cli.mjs'),
+      'api',
+      'outputs',
+      'inspect',
+      '--workspace',
+      root,
+      '--id',
+      outputId,
+    ], { cwd }),
+    (error) => {
+      const response = JSON.parse(error.stderr);
+      assert.equal(response.operation, 'outputs_inspect');
+      assert.match(response.error.message, new RegExp(outputId));
+      assert.doesNotMatch(response.error.message, /malformed/u);
+      return true;
+    },
+  );
+});

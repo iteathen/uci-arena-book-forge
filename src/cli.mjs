@@ -45,6 +45,15 @@ function parseArguments(argv) {
 
 function output(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 
+export function apiOperationFromArguments(argv) {
+  if (argv[0] !== 'api') return null;
+  if (argv[1] === 'outputs' && ['list', 'inspect'].includes(argv[2])) {
+    return `outputs_${argv[2]}`;
+  }
+  if (argv[1] === 'config' && argv[2] === 'validate') return 'config_validate';
+  return argv[1] ?? 'unknown';
+}
+
 async function main() {
   const { positional, options } = parseArguments(process.argv.slice(2));
   const [command, subcommand, argument, detail] = positional;
@@ -63,7 +72,10 @@ async function main() {
     } else if (command === 'api' && subcommand === 'outputs' && argument === 'list') {
       output(await listOutputsApi(catalog, config, options.cursor ?? ''));
     } else if (command === 'api' && subcommand === 'outputs' && argument === 'inspect') {
-      output(await inspectOutputApi(catalog, config, detail));
+      if (options.id && detail && options.id !== detail) {
+        throw new Error('api outputs inspect received conflicting output ids');
+      }
+      output(await inspectOutputApi(catalog, config, options.id ?? detail));
     } else if (command === 'api' && subcommand === 'config' && argument === 'validate') {
       output(validateConfigApi(config));
     } else if (command === 'init') {
@@ -142,9 +154,7 @@ async function main() {
 }
 
 main().catch((error) => {
-  const apiOperation = process.argv[2] === 'api'
-    ? process.argv.slice(3, 6).filter(Boolean).join('_')
-    : null;
+  const apiOperation = apiOperationFromArguments(process.argv.slice(2));
   process.stderr.write(`${JSON.stringify(
     apiOperation ? apiError(apiOperation, error) : { ok: false, error: error.message },
     null,

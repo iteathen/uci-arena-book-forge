@@ -24,6 +24,15 @@ node src/cli.mjs daemon --workspace E:\book-forge --once
 node src/cli.mjs status --workspace E:\book-forge --json
 ```
 
+Manager consumes the same installed CLI through the versioned JSON API. Output
+inspection uses a named id so workspace/config flags cannot be mistaken for
+provider-owned output identity:
+
+```powershell
+node src/cli.mjs api outputs list --workspace E:\book-forge
+node src/cli.mjs api outputs inspect --workspace E:\book-forge --id integration-0123456789abcdefabcd
+```
+
 Inspect or manually advance remote acquisition:
 
 ```powershell
