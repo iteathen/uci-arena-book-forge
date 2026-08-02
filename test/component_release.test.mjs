@@ -2,7 +2,29 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { validateWindowsRuntimeOwnership } from "../tools/release/component_release.mjs";
+import {
+  validatedDiscovery,
+  validateWindowsRuntimeOwnership,
+} from "../tools/release/component_release.mjs";
+
+test("component discovery is role-declared and locator-bounded", () => {
+  assert.deepEqual(
+    validatedDiscovery(
+      [{ kind: "replacement_service", locator: { source: "entrypoint", entrypoint: "cli" } }],
+      { cli: "service/cli.mjs" },
+      [{ path: "service/cli.mjs" }],
+    ),
+    [{ kind: "replacement_service", locator: { source: "entrypoint", entrypoint: "cli" } }],
+  );
+  assert.throws(
+    () => validatedDiscovery(
+      [{ kind: "replacement_service", locator: { source: "component_path", path: "missing" } }],
+      {},
+      [{ path: "service/cli.mjs" }],
+    ),
+    /unlisted/u,
+  );
+});
 
 test("Windows release closure accepts application-local VC runtimes", () => {
   assert.doesNotThrow(() => validateWindowsRuntimeOwnership([
@@ -47,6 +69,9 @@ test("provider release proves independent target-scoped native reproducibility",
   );
 
   assert.deepEqual(Object.keys(definition.native_toolchain_by_target), ["windows-x86_64"]);
+  assert.deepEqual(definition.discovery, [
+    { kind: "book_forge", locator: { source: "active_root" } },
+  ]);
   assert.equal(
     definition.entrypoints.installer_integration,
     "services/book-forge/src/installer_integration.mjs",

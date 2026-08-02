@@ -1,6 +1,9 @@
 {
   "schema": "arena_provider_component_definition_v1",
   "component_id": "book_forge.service",
+  "discovery": [
+    {"kind": "book_forge", "locator": {"source": "active_root"}}
+  ],
   "source_repository": "iteathen/uci-arena-book-forge",
   "package_json": "package.json",
   "native_toolchain_by_target": {
