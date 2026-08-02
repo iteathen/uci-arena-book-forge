@@ -59,7 +59,7 @@ jobs:
             throw 'unsupported target'
           }
       - run: npm ci
-      - name: Build native background helpers
+      - name: Build independent native background helpers
         if: inputs.component == 'book-forge' && inputs.target == 'windows-x86_64'
         shell: pwsh
         run: |
@@ -67,10 +67,15 @@ jobs:
           cmake --build build/native --config Release
           cmake --install build/native --config Release --prefix native
           cmake --install build/native --config Release --prefix provider_stage/background_service_native
+          cmake -S vendor/background-service-runtime/native -B build/native-repro -A x64
+          cmake --build build/native-repro --config Release
+          cmake --install build/native-repro --config Release --prefix provider_stage/background_service_native_repro
       - run: npm run check
       - name: Build deterministic bootstrap snapshot
         if: inputs.component == 'opening-book'
-        run: node tools/release/build_opening_book_component.mjs --output provider_stage/opening_book
+        run: |
+          node tools/release/build_opening_book_component.mjs --output provider_stage/opening_book
+          node tools/release/build_opening_book_component.mjs --output provider_stage/opening_book_repro
       - name: Write exact test receipt
         shell: pwsh
         run: |
@@ -89,18 +94,110 @@ jobs:
           foreach ($test in $tests) { $arguments += @('--passed-test', $test) }
           & node @arguments
           if ($LASTEXITCODE -ne 0) { throw 'test receipt construction failed' }
-      - name: Build deterministic component
+      - name: Write exact native toolchain receipt
+        if: inputs.component == 'book-forge' && inputs.target == 'windows-x86_64'
+        shell: pwsh
+        run: |
+          node tools/release/native_toolchain_receipt.mjs `
+            --definition release/components/book-forge.json `
+            --target $env:RELEASE_TARGET `
+            --workflow-identity $env:RELEASE_WORKFLOW_IDENTITY `
+            --primary-build-root build/native `
+            --reproduction-build-root build/native-repro `
+            --output provider_stage/native-toolchain-receipt.json
+          if ($LASTEXITCODE -ne 0) { throw 'native toolchain receipt construction failed' }
+      - name: Build and compare independent component packages
         shell: pwsh
         run: |
           $epoch = git show -s --format=%ct HEAD
-          node tools/release/component_release.mjs `
-            --definition "release/components/$env:RELEASE_COMPONENT.json" `
-            --version $env:RELEASE_VERSION `
-            --target $env:RELEASE_TARGET `
-            --output-dir dist/provider `
-            --source-date-epoch "$epoch" `
-            --workflow-identity $env:RELEASE_WORKFLOW_IDENTITY `
-            --test-receipt provider_stage/component-test-receipt.json
+          $baseArguments = @(
+            'tools/release/component_release.mjs',
+            '--definition', "release/components/$env:RELEASE_COMPONENT.json",
+            '--version', $env:RELEASE_VERSION,
+            '--target', $env:RELEASE_TARGET,
+            '--source-date-epoch', "$epoch",
+            '--workflow-identity', $env:RELEASE_WORKFLOW_IDENTITY,
+            '--test-receipt', 'provider_stage/component-test-receipt.json'
+          )
+          if ($env:RELEASE_COMPONENT -eq 'book-forge' -and $env:RELEASE_TARGET -eq 'windows-x86_64') {
+            $baseArguments += @(
+              '--native-toolchain-receipt', 'provider_stage/native-toolchain-receipt.json'
+            )
+          }
+
+          & node @baseArguments --output-dir dist/provider
+          if ($LASTEXITCODE -ne 0) { throw 'Primary component construction failed' }
+
+          $primaryStage = $null
+          $reproStage = $null
+          if ($env:RELEASE_COMPONENT -eq 'opening-book') {
+            $primaryStage = 'provider_stage/opening_book'
+            $reproStage = 'provider_stage/opening_book_repro'
+          } elseif ($env:RELEASE_TARGET -eq 'windows-x86_64') {
+            $primaryStage = 'provider_stage/background_service_native'
+            $reproStage = 'provider_stage/background_service_native_repro'
+          }
+
+          if ($primaryStage) {
+            $savedPrimary = "$primaryStage-primary"
+            Move-Item -LiteralPath $primaryStage -Destination $savedPrimary
+            Move-Item -LiteralPath $reproStage -Destination $primaryStage
+          }
+          try {
+            & node @baseArguments --output-dir dist/provider-repro
+            if ($LASTEXITCODE -ne 0) { throw 'Reproduction component construction failed' }
+
+            $primaryArchive = @(Get-ChildItem -LiteralPath dist/provider -File -Filter '*.tar.gz')
+            $reproArchive = @(Get-ChildItem -LiteralPath dist/provider-repro -File -Filter '*.tar.gz')
+            if ($primaryArchive.Count -ne 1 -or $reproArchive.Count -ne 1) {
+              throw 'Reproducibility check requires exactly one archive per output root'
+            }
+            $primaryHash = (Get-FileHash -LiteralPath $primaryArchive[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $reproHash = (Get-FileHash -LiteralPath $reproArchive[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($primaryHash -ne $reproHash) {
+              $diffRoot = Join-Path $env:RUNNER_TEMP 'book-forge-provider-repro-diff'
+              $diffA = Join-Path $diffRoot 'primary'
+              $diffB = Join-Path $diffRoot 'reproduction'
+              New-Item -ItemType Directory -Force $diffA, $diffB | Out-Null
+              cmake -E chdir $diffA cmake -E tar xf $($primaryArchive[0].FullName)
+              if ($LASTEXITCODE -ne 0) { throw 'Primary archive extraction failed during reproducibility diagnosis' }
+              cmake -E chdir $diffB cmake -E tar xf $($reproArchive[0].FullName)
+              if ($LASTEXITCODE -ne 0) { throw 'Reproduction archive extraction failed during reproducibility diagnosis' }
+              $relativeFiles = @(
+                Get-ChildItem -LiteralPath $diffA -File -Recurse |
+                  ForEach-Object { $_.FullName.Substring($diffA.Length + 1).Replace('\', '/') }
+                Get-ChildItem -LiteralPath $diffB -File -Recurse |
+                  ForEach-Object { $_.FullName.Substring($diffB.Length + 1).Replace('\', '/') }
+              ) | Sort-Object -Unique
+              $firstDifference = '<archive metadata>'
+              foreach ($relative in $relativeFiles) {
+                $left = Join-Path $diffA $relative
+                $right = Join-Path $diffB $relative
+                if (-not (Test-Path -LiteralPath $left) -or -not (Test-Path -LiteralPath $right) -or
+                    (Get-FileHash -LiteralPath $left -Algorithm SHA256).Hash -ne
+                    (Get-FileHash -LiteralPath $right -Algorithm SHA256).Hash) {
+                  $firstDifference = $relative
+                  break
+                }
+              }
+              throw "Independent component builds differ: primary=$primaryHash repro=$reproHash first_path=$firstDifference"
+            }
+            $primaryResult = @(Get-ChildItem -LiteralPath dist/provider -File -Filter '*.provider-result.json')
+            $reproResult = @(Get-ChildItem -LiteralPath dist/provider-repro -File -Filter '*.provider-result.json')
+            if ($primaryResult.Count -ne 1 -or $reproResult.Count -ne 1 -or
+                (Get-FileHash -LiteralPath $primaryResult[0].FullName -Algorithm SHA256).Hash -ne
+                (Get-FileHash -LiteralPath $reproResult[0].FullName -Algorithm SHA256).Hash) {
+              throw 'Independent component provider results differ'
+            }
+            Write-Output "Independent component reproducibility passed: $primaryHash"
+          } finally {
+            if ($primaryStage) {
+              if (Test-Path -LiteralPath $primaryStage) {
+                Remove-Item -LiteralPath $primaryStage -Recurse -Force
+              }
+              Move-Item -LiteralPath $savedPrimary -Destination $primaryStage
+            }
+          }
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
         with:
           cosign-release: v3.0.6

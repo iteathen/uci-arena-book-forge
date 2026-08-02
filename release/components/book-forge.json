@@ -3,6 +3,13 @@
   "component_id": "book_forge.service",
   "source_repository": "iteathen/uci-arena-book-forge",
   "package_json": "package.json",
+  "native_toolchain_by_target": {
+    "windows-x86_64": {
+      "receipt_schema": "arena_native_toolchain_receipt_v1",
+      "build_system": "cmake",
+      "language": "cxx"
+    }
+  },
   "contract_manifest": "services/book-forge/contracts/service-contract.json",
   "include": [
     {"source": "src", "target": "services/book-forge/src"},

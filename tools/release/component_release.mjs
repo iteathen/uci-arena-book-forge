@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
 import { readAndValidateTestReceipt } from "./test_receipt.mjs";
+import { readAndValidateNativeToolchainReceipt } from "./native_toolchain_receipt.mjs";
 
 const FORBIDDEN_PARTS = new Set([
   ".git",
@@ -308,6 +309,7 @@ export function buildComponent({
   sourceDateEpoch,
   workflowIdentity,
   testReceiptPath,
+  nativeToolchainReceiptPath,
   allowDirty = false,
 }) {
   const definition = JSON.parse(readFileSync(definitionPath, "utf8"));
@@ -345,6 +347,23 @@ export function buildComponent({
     sourceCommit: identity.commit,
     workflowIdentity,
   });
+  const nativeToolchainRequired = definition.native_toolchain !== undefined
+    || definition.native_toolchain_by_target?.[target] !== undefined;
+  let nativeToolchainEvidence;
+  if (nativeToolchainRequired) {
+    if (!nativeToolchainReceiptPath) {
+      throw new Error("native provider components require an exact toolchain receipt");
+    }
+    nativeToolchainEvidence = readAndValidateNativeToolchainReceipt({
+      filename: nativeToolchainReceiptPath,
+      definition,
+      target,
+      sourceCommit: identity.commit,
+      workflowIdentity,
+    });
+  } else if (nativeToolchainReceiptPath) {
+    throw new Error("non-native provider component received a native toolchain receipt");
+  }
   const releaseRoot = path.resolve(outputDirectory);
   definition.target_triple = target;
   const staging = path.join(
@@ -506,6 +525,10 @@ export function buildComponent({
         node: process.version,
         platform: process.platform,
         architecture: process.arch,
+        ...(nativeToolchainEvidence ? {
+          native_receipt_sha256: nativeToolchainEvidence.sha256,
+          native_builds: nativeToolchainEvidence.receipt.builds,
+        } : {}),
       },
       dependency_lock_identities: definition.dependency_lock_identities ?? {},
       build_flags: definition.build_flags ?? [],
@@ -543,6 +566,9 @@ function main() {
     sourceDateEpoch: args["source-date-epoch"],
     workflowIdentity: args["workflow-identity"],
     testReceiptPath: path.resolve(args["test-receipt"]),
+    nativeToolchainReceiptPath: args["native-toolchain-receipt"]
+      ? path.resolve(args["native-toolchain-receipt"])
+      : undefined,
     allowDirty: args["allow-dirty"] === "true",
   });
   process.stdout.write(`${JSON.stringify(result.result)}\n`);

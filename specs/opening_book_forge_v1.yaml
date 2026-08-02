@@ -440,3 +440,13 @@ shared_heavy_background_lease_2026_07_25:
     - background_producers_are_mutually_exclusive
     - courtesy_work_continues_without_heavy_lease
     - foreground_request_revokes_background_within_two_seconds
+
+provider_release_reproducibility_2026_08_01:
+  status: active
+  owner: book_forge_provider_release
+  rules:
+    - "A Windows Book Forge candidate builds the shared native helpers twice from independent empty build and staging roots; repacking one staged payload is not reproducibility evidence."
+    - "Both complete unsigned component archives and both provider-result predicates are byte-identical before signing or publication."
+    - "The exact native toolchain receipt binds component id, target, source commit, workflow identity, and primary plus reproduction build roles."
+    - "Linux Book Forge and opening-book artifacts contain no native helper bytes and neither require nor invent native toolchain evidence."
+    - "A mismatch blocks publication and reports both archive digests plus the first differing payload path."

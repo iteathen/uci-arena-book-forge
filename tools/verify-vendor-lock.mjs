@@ -60,9 +60,9 @@ if (process.argv.includes("--write")) {
   const lock = {
     schema: "uci_arena_upstream_vendor_lock_v1",
     source_repository: "iteathen/UCI_Arena",
-    source_commit: "00367e2dc53d6f5ec1e14d9bb094482455ab29d3",
+    source_commit: "a2dd6f2677dfaf44242b5591d91012df4d26f43f",
     packages: {
-      "@uci-arena/background-service-runtime": "1.0.1",
+      "@uci-arena/background-service-runtime": "1.0.2",
     },
     files,
   };
@@ -74,8 +74,8 @@ if (process.argv.includes("--write")) {
 const lock = JSON.parse(readFileSync(lockPath, "utf8"));
 if (lock.schema !== "uci_arena_upstream_vendor_lock_v1"
     || lock.source_repository !== "iteathen/UCI_Arena"
-    || lock.source_commit !== "00367e2dc53d6f5ec1e14d9bb094482455ab29d3"
-    || lock.packages?.["@uci-arena/background-service-runtime"] !== "1.0.1"
+    || lock.source_commit !== "a2dd6f2677dfaf44242b5591d91012df4d26f43f"
+    || lock.packages?.["@uci-arena/background-service-runtime"] !== "1.0.2"
     || Object.keys(lock.packages ?? {}).length !== 1
     || JSON.stringify(lock.files) !== JSON.stringify(files)) {
   throw new Error("vendored upstream package closure does not match its exact lock");
