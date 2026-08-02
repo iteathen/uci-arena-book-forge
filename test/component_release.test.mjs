@@ -59,6 +59,15 @@ test("provider release proves independent target-scoped native reproducibility",
     definition.installer_integration.dependency_bindings.map((binding) => binding.name),
     ["stockfish"],
   );
+  assert.equal(definition.installer_integration.startup_control.entrypoint, "cli");
+  assert.deepEqual(
+    definition.installer_integration.startup_control.actions,
+    { install: ["startup", "install"], uninstall: ["startup", "uninstall"] },
+  );
+  assert.equal(
+    definition.installer_integration.startup_control.result.envelope,
+    "startup",
+  );
   assert.match(workflow, /build\/native-repro/u);
   assert.match(workflow, /provider_stage\/background_service_native_repro/u);
   assert.match(workflow, /provider_stage\/opening_book_repro/u);

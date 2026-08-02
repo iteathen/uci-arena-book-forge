@@ -432,6 +432,7 @@ export function buildComponent({
       installerIntegration = structuredClone(definition.installer_integration);
       const integrationEntrypoint = installerIntegration.entrypoint;
       const invocation = installerIntegration.invocation;
+      const startupControl = installerIntegration.startup_control;
       if (installerIntegration.schema !== "arena_provider_installer_integration_v1"
           || installerIntegration.schema_version !== 1
           || typeof integrationEntrypoint !== "string"
@@ -443,7 +444,18 @@ export function buildComponent({
           || !dependencyIds.includes(invocation.runtime_component_id)
           || !/^[A-Za-z0-9._-]+$/u.test(invocation.runtime_entrypoint ?? "")
           || !Array.isArray(installerIntegration.dependency_bindings)
-          || !Array.isArray(installerIntegration.locator_bindings)) {
+          || !Array.isArray(installerIntegration.locator_bindings)
+          || startupControl?.schema !== "arena_provider_startup_control_v1"
+          || startupControl.schema_version !== 1
+          || !Object.hasOwn(entrypoints, startupControl.entrypoint)
+          || JSON.stringify(startupControl.actions?.install) !== JSON.stringify(["startup", "install"])
+          || JSON.stringify(startupControl.actions?.uninstall) !== JSON.stringify(["startup", "uninstall"])
+          || startupControl.workspace_argument?.flag !== "--workspace"
+          || startupControl.workspace_argument?.relative_path !== "."
+          || startupControl.configuration_argument !== "--config"
+          || startupControl.result?.envelope !== "startup"
+          || startupControl.result?.require_configuration_match_on_install !== true
+          || startupControl.result?.require_live_on_install !== false) {
         throw new Error("provider installer-integration contract is invalid");
       }
     }
