@@ -5,6 +5,11 @@
   "cli_entrypoint": "services/book-forge/src/cli.mjs",
   "configuration_schema": "uci_arena_book_forge_config_v1",
   "status_schema": "uci_arena_book_forge_status_v2",
+  "schema_documents": {
+    "configuration": "contracts/configuration-schema.json",
+    "status": "contracts/status-schema.json",
+    "output": "contracts/output-schema.json"
+  },
   "capabilities": [
     "status",
     "start",
@@ -18,6 +23,14 @@
   "startup": {
     "windows": "per_user_task_scheduler",
     "linux": "per_user_systemd"
+  },
+  "controls": {
+    "start": {"arguments": ["start"], "registration_mutation": false},
+    "stop": {"arguments": ["stop"], "registration_mutation": false},
+    "pause": {"arguments": ["pause"], "registration_mutation": false},
+    "resume": {"arguments": ["resume"], "registration_mutation": false},
+    "startup_install": {"arguments": ["startup", "install"], "registration_mutation": true},
+    "startup_uninstall": {"arguments": ["startup", "uninstall"], "registration_mutation": true}
   },
   "health_smoke": {
     "command": "status",

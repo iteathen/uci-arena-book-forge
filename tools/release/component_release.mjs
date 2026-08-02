@@ -71,6 +71,51 @@ function exactIdentifierSet(value) {
   return [...value].sort();
 }
 
+function validateServiceSchemaDocuments({ contract, definition, entrypoints, files, staging }) {
+  const contractDocuments = contract.schema_documents;
+  if (JSON.stringify(contractDocuments ?? null) !== JSON.stringify(definition.schema_documents ?? null)) {
+    throw new Error('service schema documents do not match the provider definition');
+  }
+  const expected = {
+    configuration: contract.configuration_schema,
+    status: contract.status_schema,
+    output: contract.manager_integration_api?.output_schema,
+  };
+  if (!contractDocuments || Object.keys(contractDocuments).sort().join(',') !== Object.keys(expected).sort().join(',')) {
+    throw new Error('service contract must declare configuration, status, and output schema documents');
+  }
+  const cliRoot = path.posix.dirname(path.posix.dirname(normalizedRelative(entrypoints.cli)));
+  for (const [role, schemaId] of Object.entries(expected)) {
+    const document = normalizedRelative(contractDocuments[role]);
+    const payloadPath = normalizedRelative(path.posix.join(cliRoot, document));
+    if (!files.some((file) => file.path === payloadPath)) {
+      throw new Error(`service ${role} schema document is not in the payload: ${payloadPath}`);
+    }
+    const schema = JSON.parse(readFileSync(path.join(staging, payloadPath), 'utf8'));
+    if (schema.$schema !== 'https://json-schema.org/draft/2020-12/schema' || schema.$id !== schemaId ||
+        schema.type !== 'object' || schema.additionalProperties !== false) {
+      throw new Error(`service ${role} schema document does not close ${schemaId}`);
+    }
+  }
+}
+
+function validateServiceControls(contract, definition) {
+  if (JSON.stringify(contract.controls ?? null) !== JSON.stringify(definition.controls ?? null)) {
+    throw new Error('service controls do not match the provider definition');
+  }
+  const expectedControls = ['pause', 'resume', 'start', 'startup_install', 'startup_uninstall', 'stop'];
+  if (!contract.controls || Object.keys(contract.controls).sort().join(',') !== expectedControls.join(',')) {
+    throw new Error('service lifecycle controls are incomplete');
+  }
+  for (const [name, control] of Object.entries(contract.controls)) {
+    if (!Array.isArray(control.arguments) || control.arguments.length === 0 ||
+        control.arguments.some((argument) => typeof argument !== 'string' || !/^[a-z-]+$/u.test(argument)) ||
+        typeof control.registration_mutation !== 'boolean' || !contract.capabilities.includes(name)) {
+      throw new Error(`invalid service lifecycle control: ${name}`);
+    }
+  }
+}
+
 export function validatedManagerIntegrationApi(candidate, entrypoints) {
   const entrypoint = candidate?.entrypoint;
   const operations = exactIdentifierSet(candidate?.operations);
@@ -365,6 +410,8 @@ export function buildComponent({
           `standalone service contract does not match ${definition.component_id}@${version}`,
         );
       }
+      validateServiceControls(contract, definition);
+      validateServiceSchemaDocuments({ contract, definition, entrypoints, files, staging });
     }
     const manifest = {
       schema: "arena_install_component_v1",
@@ -381,6 +428,8 @@ export function buildComponent({
       dependencies: definition.dependencies ?? [],
       ...(definition.default_model ? { default_model: definition.default_model } : {}),
       startup: definition.startup ?? {},
+      controls: definition.controls ?? {},
+      schema_documents: definition.schema_documents ?? {},
       data_paths: definition.data_paths ?? [],
       files,
     };

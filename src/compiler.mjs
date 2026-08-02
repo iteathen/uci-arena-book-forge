@@ -1,10 +1,24 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { lstat, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { encodePolyglotMove, legalUciMove, keyHex, moveHex, polyglotKey } from './chess.mjs';
 import { parsePolicy, scoreSiblingCandidates } from './book_policy.mjs';
 
 export { parsePolicy } from './book_policy.mjs';
+
+const compilerVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+const maximumSnapshotRecords = 2_000_000;
+const maximumManifestBytes = 1_048_576;
+const maximumPolicyBytes = 1_048_576;
+
+async function requireRegularFile(filename, maximumBytes, exactBytes = null) {
+  const details = await lstat(filename);
+  if (!details.isFile() || details.isSymbolicLink()) throw new Error(`Snapshot artifact is not a regular file: ${path.basename(filename)}`);
+  if (exactBytes !== null && details.size !== exactBytes) throw new Error(`Snapshot artifact size mismatch: ${path.basename(filename)}`);
+  if (details.size > maximumBytes) throw new Error(`Snapshot artifact exceeds its size contract: ${path.basename(filename)}`);
+  return details;
+}
 
 export function fnv1a64(bytes) {
   let value = 0xcbf29ce484222325n;
@@ -30,10 +44,10 @@ function compileCandidates(observations, policy) {
     eligible.sort((left, right) => right.selectionWeight - left.selectionWeight || right.lcb - left.lcb || left.rawMove - right.rawMove);
     selected.push(...eligible.slice(0, 6));
   }
-  if (selected.length > 2_000_000) {
+  if (selected.length > maximumSnapshotRecords) {
     selected.sort((left, right) => right.lcb - left.lcb || left.games - right.games ||
       (left.key < right.key ? -1 : left.key > right.key ? 1 : left.rawMove - right.rawMove));
-    selected.length = 2_000_000;
+    selected.length = maximumSnapshotRecords;
   }
   selected.sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : left.rawMove - right.rawMove);
   return selected;
@@ -228,7 +242,7 @@ export async function buildSnapshot(catalog, config, channel = 'integration') {
     qualification_metrics: metrics,
     source_evidence: sourceEvidence,
     corpus_filter: corpusFilter,
-    compiler: { package: '@uci-arena/book-forge', version: '1.0.0', observation_shards: 64 },
+    compiler: { package: '@uci-arena/book-forge', version: compilerVersion, observation_shards: 64 },
   };
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
   try {
@@ -259,18 +273,34 @@ export async function buildSnapshot(catalog, config, channel = 'integration') {
 }
 
 export async function validateSnapshot(directory) {
+  const directoryDetails = await lstat(directory);
+  if (!directoryDetails.isDirectory() || directoryDetails.isSymbolicLink()) throw new Error('Snapshot root is not a regular directory');
   const manifestPath = path.join(directory, 'snapshot.manifest.json');
+  await requireRegularFile(manifestPath, maximumManifestBytes);
   const manifestBytes = await readFile(manifestPath);
   const manifest = JSON.parse(manifestBytes.toString('utf8'));
   if (manifest.schema !== 'uci_arena_book_snapshot_v1') throw new Error('Unsupported snapshot manifest schema');
   if (!['integration', 'qualified'].includes(manifest.channel) || manifest.qualified !== (manifest.channel === 'qualified')) throw new Error('Invalid snapshot channel metadata');
+  if (!Number.isSafeInteger(manifest.record_count) || manifest.record_count < 1 || manifest.record_count > maximumSnapshotRecords) {
+    throw new Error('Snapshot record count is outside the supported range');
+  }
   if (!Array.isArray(manifest.source_evidence)) throw new Error('Snapshot source evidence is missing');
   if (!manifest.corpus_filter || typeof manifest.corpus_filter !== 'object') throw new Error('Snapshot corpus filter evidence is missing');
   if (manifest.includes_fixture !== manifest.source_evidence.some((source) => source.fixture === true)) throw new Error('Snapshot fixture provenance mismatch');
-  const book = await readFile(path.join(directory, 'strong_rare_v1.bin'));
-  const stats = await readFile(path.join(directory, 'strong_rare_v1.ffstats'));
-  const policy = await readFile(path.join(directory, 'strong_rare_v1.policy'));
-  const audit = await readFile(path.join(directory, 'evaluation.audit.jsonl'));
+  const bookPath = path.join(directory, 'strong_rare_v1.bin');
+  const statsPath = path.join(directory, 'strong_rare_v1.ffstats');
+  const policyPath = path.join(directory, 'strong_rare_v1.policy');
+  const auditPath = path.join(directory, 'evaluation.audit.jsonl');
+  await Promise.all([
+    requireRegularFile(bookPath, maximumSnapshotRecords * 16, manifest.record_count * 16),
+    requireRegularFile(statsPath, manifest.record_count * 128 + 1_024),
+    requireRegularFile(policyPath, maximumPolicyBytes),
+    requireRegularFile(auditPath, manifest.record_count * 4_096 + 1),
+  ]);
+  const book = await readFile(bookPath);
+  const stats = await readFile(statsPath);
+  const policy = await readFile(policyPath);
+  const audit = await readFile(auditPath);
   const artifacts = { 'strong_rare_v1.bin': book, 'strong_rare_v1.ffstats': stats, 'strong_rare_v1.policy': policy, 'evaluation.audit.jsonl': audit };
   for (const [name, bytes] of Object.entries(artifacts)) {
     if (sha256(bytes) !== manifest.artifacts[name]) throw new Error(`Snapshot digest mismatch: ${name}`);

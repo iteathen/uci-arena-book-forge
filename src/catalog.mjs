@@ -509,10 +509,22 @@ export class Catalog {
   daemonState() {
     const row = this.database.prepare('SELECT * FROM daemon_state WHERE singleton=1').get();
     const heartbeatMs = Date.parse(row.heartbeat_at ?? '');
+    const stale = !Number.isFinite(heartbeatMs) || Date.now() - heartbeatMs > 300_000;
+    let processAlive = false;
+    if (Number.isSafeInteger(row.pid) && row.pid > 0) {
+      try {
+        process.kill(Number(row.pid), 0);
+        processAlive = true;
+      } catch (error) {
+        processAlive = error.code === 'EPERM';
+      }
+    }
+    let lastReport = {};
+    try { lastReport = JSON.parse(row.last_report || '{}'); } catch { lastReport = { invalid: true }; }
     return { pid: row.pid === null ? null : Number(row.pid), phase: row.phase, startedAt: row.started_at,
       heartbeatAt: row.heartbeat_at, cycleStartedAt: row.cycle_started_at, cycleCompletedAt: row.cycle_completed_at,
-      resourceMode: row.resource_mode, lastReport: JSON.parse(row.last_report || '{}'), lastError: row.last_error,
-      stale: !Number.isFinite(heartbeatMs) || Date.now() - heartbeatMs > 300_000 };
+      resourceMode: row.resource_mode, lastReport, lastError: row.last_error, stale, processAlive,
+      active: !stale && processAlive && !['stopped', 'failed'].includes(row.phase) };
   }
 
   putEvaluation(record) {
@@ -647,9 +659,9 @@ export class Catalog {
     const channels = this.database.prepare('SELECT * FROM channels ORDER BY channel').all();
     const snapshots = this.database.prepare('SELECT COUNT(*) AS count FROM snapshots').get();
     const qualificationGates = this.database.prepare('SELECT COUNT(*) AS count FROM qualification_gates WHERE passed=1').get();
-    return { schema: 'uci_arena_book_forge_status_v2', workspace: this.config.workspace, control: this.control(), sources, channels,
+    return { schema: 'uci_arena_book_forge_catalog_status_v1', workspace: this.config.workspace, control: this.control(), sources, channels,
       snapshots: Number(snapshots.count), passingQualificationGates: Number(qualificationGates.count),
       daemon: this.daemonState(), acquisition: this.acquisitionStatus(),
-      audit: { enabled: Boolean(this.config.pgnAudit.enabled), status: this.config.pgnAudit.enabled ? 'not_implemented' : 'disabled' } };
+      audit: { enabled: false, status: 'disabled' } };
   }
 }

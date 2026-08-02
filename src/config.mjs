@@ -30,17 +30,34 @@ function defaultTokenFile() {
   return path.join(config, 'uci-arena', 'secrets', 'lichess_bot_token.txt');
 }
 
-function suiteExecutable(windowsPath, unixPath) {
-  return path.join(suiteRoot, process.platform === 'win32' ? windowsPath : unixPath);
+export function discoverStockfish({
+  environment = process.env,
+  platform = process.platform,
+  root = suiteRoot,
+} = {}) {
+  const explicit = environment.UCI_ARENA_STOCKFISH?.trim();
+  if (explicit) return path.isAbsolute(explicit) ? path.normalize(explicit) : path.resolve(root, explicit);
+  const relative = platform === 'win32'
+    ? 'components/stockfish.engine/current/stockfish.exe'
+    : 'components/stockfish.engine/current/stockfish';
+  const suiteCandidate = path.resolve(root, relative);
+  if (existsSync(suiteCandidate)) return suiteCandidate;
+  const executable = platform === 'win32' ? 'stockfish.exe' : 'stockfish';
+  const searchPath = environment.PATH ?? environment.Path ?? '';
+  for (const rawDirectory of searchPath.split(path.delimiter).filter(Boolean)) {
+    const directory = rawDirectory.replace(/^"|"$/gu, '');
+    if (!path.isAbsolute(directory)) continue;
+    const candidate = path.resolve(directory, executable);
+    if (existsSync(candidate)) return candidate;
+  }
+  return suiteCandidate;
 }
 
 const defaults = {
   schema: 'uci_arena_book_forge_config_v1',
   workspace: process.env.BOOK_FORGE_ROOT || defaultWorkspace(),
   policyFile: path.join(packageRoot, 'policy', 'strong_rare_v1.policy'),
-  stockfish: process.env.UCI_ARENA_STOCKFISH?.trim()
-    || suiteExecutable('components/stockfish.engine/current/stockfish.exe',
-      'components/stockfish.engine/current/stockfish'),
+  stockfish: discoverStockfish(),
   nativeHelper: path.join(packageRoot, 'native', 'bin',
     process.platform === 'win32' ? 'uci_arena_background_guard.exe' : 'uci_arena_background_guard'),
   nativeLauncher: path.join(packageRoot, 'native', 'bin',
@@ -112,7 +129,7 @@ const configSchemaSuffix = '_book_forge_config_v1';
 function compatibleConfigSchema(value) {
   return typeof value === 'string'
     && (value === defaults.schema
-      || (value.endsWith(configSchemaSuffix) && value.length > configSchemaSuffix.length));
+      || (new RegExp(`^[A-Za-z0-9._-]+${configSchemaSuffix}$`, 'u').test(value)));
 }
 
 function merge(base, override) {
@@ -126,6 +143,26 @@ function merge(base, override) {
     }
   }
   return result;
+}
+
+function plainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function rejectUnknownConfiguration(template, candidate, location = 'configuration') {
+  if (!plainObject(candidate)) throw new Error(`${location} must be an object`);
+  for (const [key, value] of Object.entries(candidate)) {
+    if (!Object.hasOwn(template, key)) throw new Error(`Unknown Book Forge configuration field: ${location}.${key}`);
+    if (plainObject(template[key])) rejectUnknownConfiguration(template[key], value, `${location}.${key}`);
+  }
+}
+
+function positiveInteger(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function nonnegativeNumber(value) {
+  return Number.isFinite(value) && value >= 0;
 }
 
 function resolveConfiguredPath(value, configDirectory) {
@@ -147,6 +184,7 @@ export async function loadConfig({ configFile, workspace } = {}) {
   if (configFile) {
     const absolute = path.resolve(configFile);
     loaded = JSON.parse(await readFile(absolute, 'utf8'));
+    rejectUnknownConfiguration(defaults, loaded);
     if (!compatibleConfigSchema(loaded.schema)) {
       throw new Error(`Unsupported Book Forge config schema: ${loaded.schema ?? '<missing>'}`);
     }
@@ -161,41 +199,80 @@ export async function loadConfig({ configFile, workspace } = {}) {
   config.nativeHelper = resolveConfiguredPath(config.nativeHelper, configDirectory);
   config.nativeLauncher = resolveConfiguredPath(config.nativeLauncher, configDirectory);
   config.acquisition.tokenFile = resolveConfiguredPath(config.acquisition.tokenFile, configDirectory);
+  if (typeof config.workspace !== 'string' || typeof config.policyFile !== 'string' ||
+      typeof config.stockfish !== 'string' || typeof config.nativeHelper !== 'string' ||
+      typeof config.nativeLauncher !== 'string' || typeof config.acquisition.tokenFile !== 'string' ||
+      !config.acquisition.tokenFile.trim()) {
+    throw new Error('Book Forge configured paths must be non-empty strings');
+  }
+  if (typeof config.channels.integration !== 'boolean' || typeof config.channels.qualified !== 'boolean' ||
+      typeof config.acquisition.enabled !== 'boolean' || typeof config.analysis.enabled !== 'boolean' ||
+      typeof config.pgnAudit.enabled !== 'boolean') {
+    throw new Error('Book Forge feature switches must be booleans');
+  }
+  if (config.pgnAudit.enabled) {
+    throw new Error('Book Forge PGN audit is reserved but unavailable; pgnAudit.enabled must remain false');
+  }
+  if (!positiveInteger(config.ingestion.minimumRating) || !positiveInteger(config.ingestion.maximumPly) ||
+      !Array.isArray(config.ingestion.speeds) || config.ingestion.speeds.length === 0 ||
+      new Set(config.ingestion.speeds).size !== config.ingestion.speeds.length ||
+      config.ingestion.speeds.some((speed) => !['rapid', 'classical'].includes(speed)) ||
+      !positiveInteger(config.ingestion.chunkGames) || !positiveInteger(config.ingestion.maximumChunkRecords) ||
+      !nonnegativeNumber(config.ingestion.inboxSettleSeconds)) {
+    throw new Error('Book Forge ingestion configuration violates its bounded corpus contract');
+  }
   let acquisitionEndpoint;
   try { acquisitionEndpoint = new URL(config.acquisition.endpoint); } catch { acquisitionEndpoint = null; }
   if (config.acquisition.provider !== 'lichess_opening_explorer' || config.acquisition.variant !== 'standard' ||
       acquisitionEndpoint?.origin !== 'https://explorer.lichess.org' || acquisitionEndpoint.username || acquisitionEndpoint.password ||
       acquisitionEndpoint.pathname !== '/lichess' || acquisitionEndpoint.search || acquisitionEndpoint.hash ||
       !Array.isArray(config.acquisition.speeds) || !config.acquisition.speeds.length ||
+      new Set(config.acquisition.speeds).size !== config.acquisition.speeds.length ||
       config.acquisition.speeds.some((speed) => !['rapid', 'classical'].includes(speed)) ||
       !Array.isArray(config.acquisition.ratings) || !config.acquisition.ratings.length ||
+      new Set(config.acquisition.ratings).size !== config.acquisition.ratings.length ||
       config.acquisition.ratings.some((rating) => ![2000, 2200, 2500].includes(rating)) ||
-      !Number.isInteger(config.acquisition.movesPerPosition) || config.acquisition.movesPerPosition < 1 || config.acquisition.movesPerPosition > 50 ||
-      !Number.isInteger(config.acquisition.maximumPly) || config.acquisition.maximumPly < 1 ||
-      !Number.isInteger(config.acquisition.minimumGames) || config.acquisition.minimumGames < 1 ||
-      !Number.isInteger(config.acquisition.dailyRequestBudget) || config.acquisition.dailyRequestBudget < 1 ||
-      config.acquisition.requestIntervalMs < 5_000 || config.acquisition.requestTimeoutMs < 1_000 ||
-      config.acquisition.resourcePollMs < 100 || config.acquisition.resourcePollMs > 2_000 ||
-      !Number.isInteger(config.acquisition.publishedRefreshDays) || config.acquisition.publishedRefreshDays < 1 ||
-      !Number.isInteger(config.acquisition.frontierRefreshDays) || config.acquisition.frontierRefreshDays < 1 ||
-      !Number.isInteger(config.acquisition.firstPublishPositions) || config.acquisition.firstPublishPositions < 1 ||
-      config.acquisition.firstPublishMaxMinutes <= 0 || config.acquisition.integrationDebounceMinutes < 0 ||
-      config.acquisition.crawlLcbGap <= 0) {
+      !positiveInteger(config.acquisition.movesPerPosition) || config.acquisition.movesPerPosition > 50 ||
+      !positiveInteger(config.acquisition.maximumPly) || !positiveInteger(config.acquisition.minimumGames) ||
+      !positiveInteger(config.acquisition.dailyRequestBudget) ||
+      !positiveInteger(config.acquisition.requestIntervalMs) || config.acquisition.requestIntervalMs < 5_000 ||
+      !positiveInteger(config.acquisition.requestTimeoutMs) || config.acquisition.requestTimeoutMs < 1_000 ||
+      !positiveInteger(config.acquisition.resourcePollMs) || config.acquisition.resourcePollMs < 100 || config.acquisition.resourcePollMs > 2_000 ||
+      !positiveInteger(config.acquisition.publishedRefreshDays) ||
+      !positiveInteger(config.acquisition.frontierRefreshDays) ||
+      !positiveInteger(config.acquisition.firstPublishPositions) ||
+      !Number.isFinite(config.acquisition.firstPublishMaxMinutes) || config.acquisition.firstPublishMaxMinutes <= 0 ||
+      !nonnegativeNumber(config.acquisition.integrationDebounceMinutes) ||
+      !Number.isFinite(config.acquisition.crawlLcbGap) || config.acquisition.crawlLcbGap <= 0) {
     throw new Error('Book Forge acquisition configuration violates its numeric or provider contract');
   }
-  if (!Number.isInteger(config.analysis.threadsPerWorker) || config.analysis.threadsPerWorker < 1 ||
-      !Number.isInteger(config.analysis.maximumWorkers) || config.analysis.maximumWorkers < 1 ||
-      !Number.isInteger(config.analysis.backgroundSipWorkers) || config.analysis.backgroundSipWorkers < 1 ||
+  if (!positiveInteger(config.analysis.initialNodes) || !positiveInteger(config.analysis.confirmationNodes) ||
+      config.analysis.confirmationNodes < config.analysis.initialNodes ||
+      !positiveInteger(config.analysis.threadsPerWorker) || !positiveInteger(config.analysis.hashMbPerWorker) ||
+      !positiveInteger(config.analysis.maximumWorkers) ||
+      !positiveInteger(config.analysis.backgroundSipWorkers) ||
       config.analysis.backgroundSipWorkers > config.analysis.maximumWorkers || config.analysis.backgroundSipWorkers > 2 ||
-      !Number.isInteger(config.analysis.backgroundSipEfficiencyCores) ||
+      !positiveInteger(config.analysis.backgroundSipEfficiencyCores) ||
       config.analysis.backgroundSipEfficiencyCores < 1 || config.analysis.backgroundSipEfficiencyCores > 2 ||
-      !Number.isInteger(config.analysis.backgroundSipDutyCyclePercent) ||
+      !positiveInteger(config.analysis.backgroundSipDutyCyclePercent) ||
       config.analysis.backgroundSipDutyCyclePercent < 1 || config.analysis.backgroundSipDutyCyclePercent > 50 ||
-      !Number.isInteger(config.daemon.cycleIntervalMs) || config.daemon.cycleIntervalMs < 1_000 ||
-      !Number.isInteger(config.daemon.failureBackoffInitialMs) || config.daemon.failureBackoffInitialMs < 1_000 ||
-      !Number.isInteger(config.daemon.failureBackoffMaximumMs) ||
+      !positiveInteger(config.daemon.cycleIntervalMs) || config.daemon.cycleIntervalMs < 1_000 ||
+      !positiveInteger(config.daemon.failureBackoffInitialMs) || config.daemon.failureBackoffInitialMs < 1_000 ||
+      !positiveInteger(config.daemon.failureBackoffMaximumMs) ||
       config.daemon.failureBackoffMaximumMs < config.daemon.failureBackoffInitialMs) {
     throw new Error('Book Forge analysis or daemon configuration violates its bounded background-work contract');
+  }
+  if (!Number.isFinite(config.resources.minimumFreeWorkspaceGb) || config.resources.minimumFreeWorkspaceGb < 0 ||
+      !Number.isFinite(config.resources.pauseAvailableMemoryGb) || config.resources.pauseAvailableMemoryGb < 0 ||
+      !Number.isFinite(config.resources.courtesyCpuPercent) || config.resources.courtesyCpuPercent < 0 || config.resources.courtesyCpuPercent > 100 ||
+      !Number.isFinite(config.resources.idleCpuPercent) || config.resources.idleCpuPercent < 0 || config.resources.idleCpuPercent > 100 ||
+      !Array.isArray(config.resources.priorityProcessNames) ||
+      new Set(config.resources.priorityProcessNames).size !== config.resources.priorityProcessNames.length ||
+      config.resources.priorityProcessNames.some((name) => typeof name !== 'string' || !name.trim() || /[\r\n\0]/u.test(name)) ||
+      !positiveInteger(config.maintenance.intervalDays) ||
+      !positiveInteger(config.maintenance.detailedCohortRetentionMonths) ||
+      !positiveInteger(config.maintenance.snapshotVersionsPerChannel)) {
+    throw new Error('Book Forge resource or maintenance configuration violates its bounded lifecycle contract');
   }
   config.paths = {
     catalog: path.join(config.workspace, 'catalog.sqlite'),

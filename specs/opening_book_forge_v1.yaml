@@ -93,6 +93,7 @@ acquisition:
       rules:
         - "Read the token only inside the provider adapter and send it only as an authorization header."
         - "Never persist, log, print, hash, copy, or place the token or its contents on a command line."
+        - "The configured token path must resolve to a regular file containing one non-empty token and no control lines; the provider rejects files larger than 4096 bytes before reading them."
         - "Authentication failure opens a visible fail-closed circuit without terminating the daemon."
   frontier:
     seed: standard_start_position
@@ -109,16 +110,19 @@ acquisition:
     timeout_ms: 10000
     rate_limit_pause_seconds_minimum: 60
     resource_revocation_abort_seconds: 2
+    maximum_response_bytes: 1048576
   publication_bootstrap:
     successful_positions: 25
     maximum_wait_minutes: 5
     integration_debounce_minutes: 15
   pgn_audit_followup:
     default_enabled: false
+    availability: reserved_not_implemented
     transport: streamed_http_zstd
     contribution_mode: audit_only
     complete_archive_retention: forbidden
     rule: "A Lichess monthly PGN audit may compare Explorer statistics but never contributes observations to a snapshot."
+    admission_rule: "Configuration that enables this reserved follow-up fails closed until a streamed audit provider and its tests exist; status never advertises a nonfunctional enabled feature."
   acquisition_only_report:
     rule: >
       A one-shot acquisition-only execution never reports ingestion,
@@ -249,6 +253,9 @@ daemon_observability:
     schema: uci_arena_book_forge_status_v2
     control_singleton_type: boolean
     control_paused_type: boolean
+    daemon_active_type: boolean
+    daemon_active_authority: "A fresh heartbeat plus a live matching process id and a running or recovering phase; a receipt, lock file, task registration, or historical status row alone is never active authority."
+    startup_projection: "Public CLI and Manager API status report platform startup registration, enablement, configuration match, and live daemon activity as distinct fields; unavailable inspection is explicit and never inferred from retained evidence."
     rule: >
       Public JSON normalizes SQLite integer storage into typed booleans; storage
       representation must not leak across the CLI contract.
@@ -259,8 +266,9 @@ daemon_observability:
     - "The Windows native guard terminates a stale daemon; the persistent native launcher then restarts it with bounded backoff, while Task Scheduler remains a second fallback if the launcher itself exits."
 
 cli:
-  commands: [init, source_add, source_quarantine, source_retire, source_restore, acquisition_run, acquisition_status, acquisition_retry_auth, daemon, pause, resume, status, snapshot_build, qualification_record, maintain, validate, publish, startup_install, startup_status, startup_uninstall, api_describe, api_status, api_outputs_list, api_outputs_inspect, api_config_validate]
+  commands: [init, source_add, source_quarantine, source_retire, source_restore, acquisition_run, acquisition_status, acquisition_retry_auth, daemon, start, stop, pause, resume, status, snapshot_build, qualification_record, maintain, validate, publish, startup_install, startup_status, startup_uninstall, api_describe, api_status, api_outputs_list, api_outputs_inspect, api_config_validate]
   background_rule: "daemon --detach starts the same single-instance worker in a hidden detached Node process."
+  lifecycle_rule: "start and stop control an existing platform startup registration without creating or deleting it; startup install and startup uninstall remain the only registration mutations."
   machine_output: json
   single_instance: true
 
@@ -283,6 +291,7 @@ manager_integration_api:
     - "The canonical output-inspection invocation is api outputs inspect --id OUTPUT_ID. The output id is a named typed argument, never inferred from a flag name or an unrelated positional value."
     - "Every failed API invocation reports the declared operation identifier, including outputs_inspect, independently of option ordering."
     - "Describe publishes component identity, API compatibility, operations, output kinds, and service-owned schemas."
+    - "Configuration, status, and output schema identities resolve to closed JSON Schema documents packaged beneath contracts/."
     - "Output list and inspect return validated immutable snapshot identity, channel, qualification authority, exact manifest and artifact digests, current-channel state, and controlled absolute paths."
     - "A supplied cursor may suppress an unchanged output list but never changes output authority."
     - "The API validates each snapshot through the normal snapshot validator before exposing it and rejects catalog paths outside config.paths.snapshots."
@@ -315,6 +324,7 @@ windows_startup:
     - "The task allows battery startup because the Book Forge resource governor immediately enters backoff on battery or battery-saver state."
     - "Multiple task instances are forbidden and the daemon lock remains the final single-instance authority."
     - "Installation is idempotent, starts the task immediately by default, writes non-secret registration evidence in the workspace, and never embeds credentials."
+    - "start runs the existing task and stop ends its current instance without deleting the registration; either command fails clearly when the task is not registered."
     - "startup uninstall ends the scheduled instance, deletes the task, and removes only Book Forge startup-registration evidence."
   validation:
     - task_xml_contract_test
@@ -333,6 +343,7 @@ linux_startup:
     - "The unit uses the installed package root as WorkingDirectory."
     - "ExecStart contains absolute private-Node, CLI, workspace, and optional config paths."
     - "Installation is idempotent and enables and starts the unit immediately."
+    - "start and stop control the registered user unit without enabling, disabling, creating, or deleting it."
     - "No secret value is stored in the unit; only a configuration or token-file path may be referenced."
     - "The daemon lock remains final single-instance authority."
 
@@ -344,6 +355,7 @@ relocatable_install:
   rules:
     - "Installed startup registrations use packageRoot rather than repositoryRoot."
     - "Stockfish and native helper locations may be supplied by explicit component configuration."
+    - "Stockfish resolution belongs to configuration composition: explicit configuration or UCI_ARENA_STOCKFISH wins, then the declared suite component path, then exact executable names in PATH; every selected executable still passes normal UCI interrogation and fingerprinting before authority is granted."
 
 validation:
   required:

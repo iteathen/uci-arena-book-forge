@@ -1,9 +1,16 @@
-import { readdir, rm } from 'node:fs/promises';
+import { lstat, realpath, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 
-function assertWithin(root, target) {
+async function assertOwnedDirectory(root, target) {
   const relative = path.relative(path.resolve(root), path.resolve(target));
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error(`Unsafe maintenance target: ${target}`);
+  const details = await lstat(target);
+  if (!details.isDirectory() || details.isSymbolicLink()) throw new Error(`Unsafe non-directory maintenance target: ${target}`);
+  const [realRoot, realTarget] = await Promise.all([realpath(root), realpath(target)]);
+  const realRelative = path.relative(realRoot, realTarget);
+  if (!realRelative || realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
+    throw new Error(`Maintenance target escapes its owned root: ${target}`);
+  }
 }
 
 function cutoffMonth(retentionMonths) {
@@ -34,7 +41,7 @@ export async function runMaintenance(catalog, config, { force = false } = {}) {
       keptByChannel.set(snapshot.channel, kept + 1);
       continue;
     }
-    assertWithin(config.paths.snapshots, snapshot.directory);
+    await assertOwnedDirectory(config.paths.snapshots, snapshot.directory);
     await rm(snapshot.directory, { recursive: true, force: true });
     catalog.deleteSnapshot(snapshot.id);
     snapshotsPruned += 1;
@@ -47,7 +54,7 @@ export async function runMaintenance(catalog, config, { force = false } = {}) {
     const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort().reverse();
     for (const name of directories.slice(config.maintenance.snapshotVersionsPerChannel)) {
       const target = path.join(root, name);
-      assertWithin(root, target);
+      await assertOwnedDirectory(root, target);
       await rm(target, { recursive: true, force: true });
       historyPruned += 1;
     }

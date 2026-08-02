@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { Chess } from 'chess.js';
 import { canonicalFen, encodePolyglotMove, keyBuffer, legalUciMove, polyglotKey, positionFingerprint } from './chess.mjs';
 import { parsePolicy, scoreSiblingCandidates } from './book_policy.mjs';
@@ -8,9 +8,43 @@ import { RESOURCE_WORK_CLASSES } from './resource_governor.mjs';
 const providerId = 'lichess_opening_explorer';
 const overlapDomain = 'lichess_standard_rated';
 const startFen = canonicalFen(new Chess().fen());
+const maximumCredentialBytes = 4_096;
+const maximumResponseBytes = 1_048_576;
 
 function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
 function sha256(value) { return createHash('sha256').update(value).digest('hex'); }
+
+async function boundedResponseText(response) {
+  const contentLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > maximumResponseBytes) {
+    throw new Error('Explorer response exceeds the 1 MiB contract');
+  }
+  if (!response.body?.getReader) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > maximumResponseBytes) {
+      throw new Error('Explorer response exceeds the 1 MiB contract');
+    }
+    return text;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maximumResponseBytes) {
+        try { await reader.cancel('response limit exceeded'); } catch {}
+        throw new Error('Explorer response exceeds the 1 MiB contract');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total).toString('utf8');
+}
 
 function positionRecord(fen) {
   const canonical = canonicalFen(fen);
@@ -37,6 +71,7 @@ function normalizedQuery(config) {
 
 function responseRecords(fen, payload) {
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.moves)) throw new Error('Explorer response is not a move aggregate object');
+  if (payload.moves.length > 50) throw new Error('Explorer response exceeds the requested move bound');
   const totals = {
     white: safeCount(payload.white, 'white total'), draws: safeCount(payload.draws, 'draw total'),
     black: safeCount(payload.black, 'black total'),
@@ -104,7 +139,11 @@ export class ExplorerAcquisition {
 
   async credential() {
     try {
-      const token = (await readFile(this.config.acquisition.tokenFile, 'utf8')).trim();
+      const details = await stat(this.config.acquisition.tokenFile);
+      if (!details.isFile() || details.size < 1 || details.size > maximumCredentialBytes) throw new Error('invalid');
+      const contents = await readFile(this.config.acquisition.tokenFile, 'utf8');
+      if (Buffer.byteLength(contents, 'utf8') > maximumCredentialBytes) throw new Error('invalid');
+      const token = contents.trim();
       if (!token || /[\r\n]/.test(token)) throw new Error('invalid');
       return token;
     } catch {
@@ -142,6 +181,9 @@ export class ExplorerAcquisition {
       try {
         const permit = await governor.permit(RESOURCE_WORK_CLASSES.ACQUISITION);
         if (!permit.allowed) { abortReason = permit.reason || 'resource permission revoked'; controller.abort(); }
+      } catch {
+        abortReason = 'resource permission check failed';
+        controller.abort();
       } finally {
         polling = false;
       }
@@ -164,7 +206,7 @@ export class ExplorerAcquisition {
         const error = new Error(`Lichess acquisition HTTP ${response.status}`);
         error.code = 'BOOK_FORGE_HTTP'; error.status = response.status; throw error;
       }
-      const body = await response.text();
+      const body = await boundedResponseText(response);
       let payload;
       try { payload = JSON.parse(body); } catch { throw new Error('Explorer response is not valid JSON'); }
       return { records: responseRecords(frontier.fen, payload), responseDigest: sha256(body), status: response.status };

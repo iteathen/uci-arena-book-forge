@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uci_arena_book_forge_config_v1",
+  "title": "UCI Arena Book Forge configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema"],
+  "properties": {
+    "schema": {"type": "string", "pattern": "^[A-Za-z0-9._-]*_book_forge_config_v1$"},
+    "workspace": {"type": "string", "minLength": 1},
+    "policyFile": {"type": "string", "minLength": 1},
+    "stockfish": {"type": "string", "minLength": 1},
+    "nativeHelper": {"type": "string", "minLength": 1},
+    "nativeLauncher": {"type": "string", "minLength": 1},
+    "channels": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"integration": {"type": "boolean"}, "qualified": {"type": "boolean"}}
+    },
+    "ingestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minimumRating": {"type": "integer", "minimum": 1},
+        "maximumPly": {"type": "integer", "minimum": 1},
+        "speeds": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["rapid", "classical"]}},
+        "chunkGames": {"type": "integer", "minimum": 1},
+        "maximumChunkRecords": {"type": "integer", "minimum": 1},
+        "inboxSettleSeconds": {"type": "number", "minimum": 0}
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "initialNodes": {"type": "integer", "minimum": 1},
+        "confirmationNodes": {"type": "integer", "minimum": 1},
+        "threadsPerWorker": {"type": "integer", "minimum": 1},
+        "hashMbPerWorker": {"type": "integer", "minimum": 1},
+        "maximumWorkers": {"type": "integer", "minimum": 1},
+        "backgroundSipWorkers": {"type": "integer", "minimum": 1, "maximum": 2},
+        "backgroundSipEfficiencyCores": {"type": "integer", "minimum": 1, "maximum": 2},
+        "backgroundSipDutyCyclePercent": {"type": "integer", "minimum": 1, "maximum": 50}
+      }
+    },
+    "acquisition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "provider": {"const": "lichess_opening_explorer"},
+        "endpoint": {"const": "https://explorer.lichess.org/lichess"},
+        "tokenFile": {"type": "string", "minLength": 1},
+        "variant": {"const": "standard"},
+        "speeds": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["rapid", "classical"]}},
+        "ratings": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": [2000, 2200, 2500]}},
+        "movesPerPosition": {"type": "integer", "minimum": 1, "maximum": 50},
+        "maximumPly": {"type": "integer", "minimum": 1},
+        "minimumGames": {"type": "integer", "minimum": 1},
+        "crawlLcbGap": {"type": "number", "exclusiveMinimum": 0},
+        "requestIntervalMs": {"type": "integer", "minimum": 5000},
+        "dailyRequestBudget": {"type": "integer", "minimum": 1},
+        "requestTimeoutMs": {"type": "integer", "minimum": 1000},
+        "resourcePollMs": {"type": "integer", "minimum": 100, "maximum": 2000},
+        "publishedRefreshDays": {"type": "integer", "minimum": 1},
+        "frontierRefreshDays": {"type": "integer", "minimum": 1},
+        "firstPublishPositions": {"type": "integer", "minimum": 1},
+        "firstPublishMaxMinutes": {"type": "number", "exclusiveMinimum": 0},
+        "integrationDebounceMinutes": {"type": "number", "minimum": 0}
+      }
+    },
+    "pgnAudit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"enabled": {"const": false}}
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minimumFreeWorkspaceGb": {"type": "number", "minimum": 0},
+        "pauseAvailableMemoryGb": {"type": "number", "minimum": 0},
+        "courtesyCpuPercent": {"type": "number", "minimum": 0, "maximum": 100},
+        "idleCpuPercent": {"type": "number", "minimum": 0, "maximum": 100},
+        "priorityProcessNames": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "maintenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "intervalDays": {"type": "integer", "minimum": 1},
+        "detailedCohortRetentionMonths": {"type": "integer", "minimum": 1},
+        "snapshotVersionsPerChannel": {"type": "integer", "minimum": 1}
+      }
+    },
+    "daemon": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cycleIntervalMs": {"type": "integer", "minimum": 1000},
+        "failureBackoffInitialMs": {"type": "integer", "minimum": 1000},
+        "failureBackoffMaximumMs": {"type": "integer", "minimum": 1000}
+      }
+    }
+  }
+}
