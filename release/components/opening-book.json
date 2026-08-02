@@ -1,6 +1,17 @@
 {
   "schema": "arena_provider_component_definition_v1",
   "component_id": "opening_book.standard",
+  "discovery": [
+    {"kind": "opening_book", "locator": {"source": "component_path", "path": "opening_books"}}
+  ],
+  "activation": [
+    {
+      "kind": "opening_book",
+      "source_path": "opening_books",
+      "destination_root": "knowledge_root",
+      "destination_path": "opening_books"
+    }
+  ],
   "source_repository": "iteathen/uci-arena-book-forge",
   "include": [
     {"source": "provider_stage/opening_book", "target": "opening_books"},

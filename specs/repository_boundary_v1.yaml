@@ -45,6 +45,9 @@ rules:
   - Manager discovers the API through arena-component.json and never opens the
     Book Forge catalog, scans the workspace, or infers artifact meaning from
     filenames.
+  - Opening-book artifacts declare read-only discovery and bounded knowledge
+    activation as separate manifest projections; component identity grants
+    neither authority.
   - Unknown API major versions, component substitution, malformed output
     identities, and paths escaping the declared snapshot root fail closed.
 

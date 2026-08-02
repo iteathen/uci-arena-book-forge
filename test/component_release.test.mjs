@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  validatedActivation,
   validatedDiscovery,
   validateWindowsRuntimeOwnership,
 } from "../tools/release/component_release.mjs";
@@ -23,6 +24,57 @@ test("component discovery is role-declared and locator-bounded", () => {
       [{ path: "service/cli.mjs" }],
     ),
     /unlisted/u,
+  );
+});
+
+test("knowledge activation is independent of component identity", () => {
+  const discovery = [{
+    kind: "opening_book",
+    locator: { source: "component_path", path: "opening_books" },
+  }];
+  assert.deepEqual(
+    validatedActivation(
+      [{
+        kind: "opening_book",
+        source_path: "opening_books",
+        destination_root: "knowledge_root",
+        destination_path: "opening_books",
+      }],
+      discovery,
+      [{ path: "opening_books/book.bin" }],
+    ),
+    [{
+      kind: "opening_book",
+      source_path: "opening_books",
+      destination_root: "knowledge_root",
+      destination_path: "opening_books",
+    }],
+  );
+  assert.throws(
+    () => validatedActivation(
+      [{
+        kind: "opening_book",
+        source_path: "opening_books",
+        destination_root: "knowledge_root",
+        destination_path: "../outside",
+      }],
+      discovery,
+      [{ path: "opening_books/book.bin" }],
+    ),
+    /unsafe/u,
+  );
+  assert.throws(
+    () => validatedActivation(
+      [{
+        kind: "opening_book",
+        source_path: "opening_books",
+        destination_root: "knowledge_root",
+        destination_path: "opening_books",
+      }],
+      [],
+      [{ path: "opening_books/book.bin" }],
+    ),
+    /matching discovery/u,
   );
 });
 
@@ -72,6 +124,14 @@ test("provider release proves independent target-scoped native reproducibility",
   assert.deepEqual(definition.discovery, [
     { kind: "book_forge", locator: { source: "active_root" } },
   ]);
+  const openingBookDefinition = JSON.parse(readFileSync(
+    new URL("../release/components/opening-book.json", import.meta.url),
+    "utf8",
+  ));
+  assert.deepEqual(openingBookDefinition.discovery, [
+    { kind: "opening_book", locator: { source: "component_path", path: "opening_books" } },
+  ]);
+  assert.equal(openingBookDefinition.activation[0].destination_root, "knowledge_root");
   assert.equal(
     definition.entrypoints.installer_integration,
     "services/book-forge/src/installer_integration.mjs",

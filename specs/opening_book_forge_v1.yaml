@@ -188,6 +188,15 @@ publication:
     owner: provider_release_ci
     component_id: opening_book.standard
     source: deterministic_integration_fixture
+    installer_projection:
+      discovery:
+        kind: opening_book
+        locator: {source: component_path, path: opening_books}
+      activation:
+        kind: opening_book
+        source_path: opening_books
+        destination_root: knowledge_root
+        destination_path: opening_books
     required_label: integration_not_strength_qualified
     purpose: >
       Ensure a clean suite installation has a valid local opening book while
@@ -196,6 +205,7 @@ publication:
       - "The bootstrap is compiled and mutually validated by Book Forge during the provider release build."
       - "The installer and Manager must display its integration status and may not claim qualified playing strength."
       - "A later qualified immutable snapshot atomically supersedes it without changing the component identity."
+      - "The provider definition declares its resource role and activation mapping; the Installer never infers either from opening_book.standard or a filename prefix."
 
 bounded_growth:
   maximum_published_moves_per_position: 6

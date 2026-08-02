@@ -143,6 +143,52 @@ export function validatedDiscovery(candidate, entrypoints, files) {
   });
 }
 
+export function validatedActivation(candidate, discovery, files) {
+  if (candidate === undefined) return undefined;
+  if (!Array.isArray(candidate) || candidate.length === 0 || candidate.length > 4) {
+    throw new Error("component activation declaration is invalid");
+  }
+  const kinds = new Set();
+  const sources = [];
+  const destinations = [];
+  const overlaps = (left, right) => left === right
+    || left.startsWith(`${right}/`)
+    || right.startsWith(`${left}/`);
+  return candidate.map((entry) => {
+    if (!entry
+        || Object.keys(entry).sort().join(",")
+          !== "destination_path,destination_root,kind,source_path"
+        || !["opening_book", "syzygy"].includes(entry.kind)
+        || kinds.has(entry.kind)
+        || entry.destination_root !== "knowledge_root") {
+      throw new Error("component activation entry is invalid");
+    }
+    const sourcePath = normalizedRelative(entry.source_path);
+    const destinationPath = normalizedRelative(entry.destination_path);
+    if (!files.some((file) => file.path.startsWith(`${sourcePath}/`))) {
+      throw new Error("component activation source is unlisted");
+    }
+    if (sources.some((existing) => overlaps(existing, sourcePath))
+        || destinations.some((existing) => overlaps(existing, destinationPath))) {
+      throw new Error("component activation paths overlap");
+    }
+    if (!discovery.some((declaration) => declaration.kind === entry.kind
+        && declaration.locator.source === "component_path"
+        && declaration.locator.path === sourcePath)) {
+      throw new Error("component activation has no matching discovery declaration");
+    }
+    kinds.add(entry.kind);
+    sources.push(sourcePath);
+    destinations.push(destinationPath);
+    return {
+      kind: entry.kind,
+      source_path: sourcePath,
+      destination_root: "knowledge_root",
+      destination_path: destinationPath,
+    };
+  });
+}
+
 function validateServiceSchemaDocuments({ contract, definition, entrypoints, files, staging }) {
   const contractDocuments = contract.schema_documents;
   if (JSON.stringify(contractDocuments ?? null) !== JSON.stringify(definition.schema_documents ?? null)) {
@@ -546,6 +592,7 @@ export function buildComponent({
       validateServiceSchemaDocuments({ contract, definition, entrypoints, files, staging });
     }
     const discovery = validatedDiscovery(definition.discovery, entrypoints, files);
+    const activation = validatedActivation(definition.activation, discovery, files);
     const manifest = {
       schema: "arena_install_component_v1",
       schema_version: 1,
@@ -554,6 +601,7 @@ export function buildComponent({
       target_triple: target,
       entrypoints,
       discovery,
+      ...(activation ? { activation } : {}),
       ...(contractManifest ? { contract_manifest: contractManifest } : {}),
       ...(managerIntegrationApi
         ? { manager_integration_api: managerIntegrationApi }
