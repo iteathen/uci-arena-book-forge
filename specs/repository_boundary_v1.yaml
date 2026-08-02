@@ -53,6 +53,7 @@ validation:
   - repository_import_boundary
   - clean_npm_install
   - source_tests
+  - windows_native_helpers_built_before_source_tests_without_native_skips
   - unrelated_working_directory_smoke
   - deterministic_component_candidate
   - keyless_signed_provenance

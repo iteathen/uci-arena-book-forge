@@ -59,14 +59,15 @@ jobs:
             throw 'unsupported target'
           }
       - run: npm ci
-      - run: npm run check
       - name: Build native background helpers
         if: inputs.component == 'book-forge' && inputs.target == 'windows-x86_64'
         shell: pwsh
         run: |
           cmake -S vendor/background-service-runtime/native -B build/native -A x64
           cmake --build build/native --config Release
+          cmake --install build/native --config Release --prefix native
           cmake --install build/native --config Release --prefix provider_stage/background_service_native
+      - run: npm run check
       - name: Build deterministic bootstrap snapshot
         if: inputs.component == 'opening-book'
         run: node tools/release/build_opening_book_component.mjs --output provider_stage/opening_book
