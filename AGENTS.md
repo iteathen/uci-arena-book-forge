@@ -2,6 +2,11 @@
 
 Book Forge is a spec-driven standalone UCI Arena service.
 
+The canonical complete-suite target is
+[`UCI_ARENA_COMPLETE_LEGO_ARCHITECTURE.md`](https://github.com/iteathen/uci-arena-installer/blob/main/docs/architecture/UCI_ARENA_COMPLETE_LEGO_ARCHITECTURE.md).
+Read `specs/suite_lego_boundaries_v1.yaml` before repository-boundary,
+Manager-integration, packaging, publication, or cross-project contract work.
+
 Before substantive planning, inspection, implementation, or validation run:
 
 ```text

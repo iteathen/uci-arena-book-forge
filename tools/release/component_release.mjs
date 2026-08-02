@@ -418,7 +418,7 @@ export function buildComponent({
       source_tree_sha256: identity.treeSha256,
       clean_tree: identity.clean,
       release_authority: "provider_component_only",
-      suite_installer_authority: "iteathen/uci-arena-manager",
+      suite_installer_authority: "iteathen/uci-arena-installer",
       workflow_identity: workflowIdentity,
       toolchain_identity: {
         node: process.version,
