@@ -28,6 +28,38 @@ const FORBIDDEN_PARTS = new Set([
   "uploads",
   "tmp",
 ]);
+const FORBIDDEN_WINDOWS_SYSTEM_DLLS = new Set([
+  "advapi32.dll",
+  "bcrypt.dll",
+  "kernel32.dll",
+  "ntdll.dll",
+  "powrprof.dll",
+  "shell32.dll",
+  "ucrtbase.dll",
+  "user32.dll",
+  "ws2_32.dll",
+]);
+
+export function validateWindowsRuntimeOwnership(files, target) {
+  if (target !== "windows-x86_64") return;
+  const forbidden = files.filter(({ path: relative }) => {
+    const normalized = relative.replaceAll("\\", "/").toLowerCase();
+    const basename = path.posix.basename(normalized);
+    return normalized.split("/").some((part) =>
+      part === "system32" || part === "syswow64")
+      || basename.startsWith("api-ms-")
+      || basename.startsWith("ext-ms-")
+      || FORBIDDEN_WINDOWS_SYSTEM_DLLS.has(basename);
+  });
+  if (forbidden.length > 0) {
+    throw new Error(
+      `OS-owned Windows runtime files are forbidden in component payloads: ${forbidden
+        .map(({ path: relative }) => relative)
+        .sort()
+        .join(", ")}`,
+    );
+  }
+}
 
 function parseArguments(argv) {
   const values = {};
@@ -328,6 +360,7 @@ export function buildComponent({
       sha256: sha256File(path.join(staging, relative)),
       size_bytes: statSync(path.join(staging, relative)).size,
     }));
+    validateWindowsRuntimeOwnership(payloadFiles, target);
     const sbom = {
       spdxVersion: "SPDX-2.3",
       dataLicense: "CC0-1.0",
