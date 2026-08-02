@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -35,6 +36,28 @@ function cleanCatalog(t, catalog, config) {
     catalog.close();
     await rm(config.workspace, { recursive: true, force: true });
   });
+}
+
+async function refreshSnapshotIdentity(directory) {
+  const manifestPath = path.join(directory, 'snapshot.manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  const contentHash = createHash('sha256');
+  for (const name of [
+    'strong_rare_v1.bin',
+    'strong_rare_v1.ffstats',
+    'strong_rare_v1.policy',
+    'evaluation.audit.jsonl',
+  ]) {
+    const bytes = await readFile(path.join(directory, name));
+    manifest.artifacts[name] = createHash('sha256').update(bytes).digest('hex');
+    contentHash.update(bytes);
+  }
+  contentHash.update(Buffer.from(JSON.stringify({
+    source_evidence: manifest.source_evidence,
+    corpus_filter: manifest.corpus_filter,
+  }), 'utf8'));
+  manifest.snapshot_id = `${manifest.channel}-${contentHash.digest('hex').slice(0, 20)}`;
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 async function isolatedHeavyLease() {
@@ -585,6 +608,10 @@ test('fixture ingestion is idempotent and creates deterministic integration snap
   assert.equal(duplicate.id, source.id);
   await ingestSource(catalog, source, config);
   const firstAggregate = catalog.aggregateObservations({ includeFixtures: true });
+  const streamedAggregate = [...catalog.iterateAggregateObservationGroups({
+    includeFixtures: true,
+  })].flat();
+  assert.deepEqual(streamedAggregate, firstAggregate);
   assert.equal(firstAggregate.length, 6);
   assert.equal(firstAggregate.reduce((sum, row) => sum + row.games, 0), 390);
 
@@ -592,6 +619,9 @@ test('fixture ingestion is idempotent and creates deterministic integration snap
   const replayAggregate = catalog.aggregateObservations({ includeFixtures: true });
   assert.equal(replayAggregate.reduce((sum, row) => sum + row.games, 0), 390);
 
+  catalog.aggregateObservations = () => assert.fail(
+    'snapshot construction must consume the bounded group iterator',
+  );
   const first = await buildSnapshot(catalog, config, 'integration');
   const firstBook = await readFile(path.join(first.directory, 'strong_rare_v1.bin'));
   await rm(first.directory, { recursive: true, force: true });
@@ -606,6 +636,34 @@ test('fixture ingestion is idempotent and creates deterministic integration snap
   const unchanged = await publishSnapshot(catalog, config, first.directory, 'integration');
   assert.equal(unchanged.unchanged, true);
   await assert.rejects(() => buildSnapshot(catalog, config, 'qualified'), /No observations|Qualified publication blocked/);
+  assert.deepEqual(
+    (await readdir(config.paths.snapshots)).filter((name) => name.startsWith('.build-')),
+    [],
+  );
+});
+
+test('failed snapshot construction removes compiler-owned temporary state', async (t) => {
+  const config = await workspace(t);
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const source = await registerInput(catalog, { fixtureId: 'bootstrap_v1' });
+  await ingestSource(catalog, source, config);
+  const firstGroup = catalog.iterateAggregateObservationGroups({
+    includeFixtures: true,
+  }).next().value;
+  catalog.iterateAggregateObservationGroups = function* failAfterFirstGroup() {
+    yield firstGroup;
+    throw new Error('injected catalog cursor failure');
+  };
+
+  await assert.rejects(
+    () => buildSnapshot(catalog, config, 'integration'),
+    /injected catalog cursor failure/,
+  );
+  assert.deepEqual(
+    (await readdir(config.paths.snapshots)).filter((name) => name.startsWith('.build-')),
+    [],
+  );
 });
 
 test('malformed snapshot is rejected before it can replace the published channel', async (t) => {
@@ -639,6 +697,29 @@ test('snapshot validation rejects a junction instead of following it as immutabl
   const manifest = JSON.parse(await readFile(path.join(snapshot.directory, 'snapshot.manifest.json'), 'utf8'));
   const packageManifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(manifest.compiler.version, packageManifest.version);
+});
+
+test('snapshot validation rejects oversized rows through its bounded stream parser', async (t) => {
+  const config = await workspace(t);
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const source = await registerInput(catalog, { fixtureId: 'bootstrap_v1' });
+  await ingestSource(catalog, source, config);
+  const snapshot = await buildSnapshot(catalog, config, 'integration');
+  const malformed = path.join(config.workspace, 'oversized-audit-row');
+  await cp(snapshot.directory, malformed, { recursive: true });
+  const auditPath = path.join(malformed, 'evaluation.audit.jsonl');
+  const audit = await readFile(auditPath);
+  await writeFile(auditPath, Buffer.concat([
+    audit,
+    Buffer.from(`{"padding":"${'x'.repeat(4_200)}"}\n`, 'utf8'),
+  ]));
+  await refreshSnapshotIdentity(malformed);
+
+  await assert.rejects(
+    () => validateSnapshot(malformed),
+    /evaluation\.audit\.jsonl line exceeds 4096 bytes/,
+  );
 });
 
 test('current relative evaluation trims confirmed bad moves without pruning merely losing positions', async (t) => {

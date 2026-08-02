@@ -205,6 +205,9 @@ bounded_growth:
   snapshot_versions_retained_per_channel: 4
   detailed_cohort_retention_months: 24
   rules:
+    - "Snapshot construction reads shard-backed observations as ordered position groups, uses a compiler-owned temporary on-disk selection spool for global ranking, and keeps memory proportional to one sibling group plus bounded I/O buffers rather than total record count."
+    - "Book, statistics, audit, digest, content-identity, and parity validation are incremental; no supported snapshot artifact or parsed row set is loaded completely into memory."
+    - "Compiler temporary databases and partial artifact roots are outside immutable snapshot authority and are removed after success or failure."
     - "Compact old observation cohorts without losing source provenance."
     - "Retain compact retired evidence while deleting obsolete PV payloads."
     - "Apply entry/removal hysteresis and re-evaluate stale high-value moves before retirement."

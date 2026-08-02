@@ -216,10 +216,14 @@ export class Catalog {
 
   source(id) { return this.database.prepare('SELECT * FROM sources WHERE id=?').get(id); }
   pendingSources() { return this.database.prepare("SELECT * FROM sources WHERE status IN ('pending','processing','error') AND lifecycle IN ('active','restored') ORDER BY id").all(); }
-  completedSources({ includeInactive = false } = {}) {
-    return this.database.prepare(includeInactive
+  *iterateCompletedSources({ includeInactive = false } = {}) {
+    yield* this.database.prepare(includeInactive
       ? "SELECT * FROM sources WHERE status='complete' ORDER BY id"
-      : "SELECT * FROM sources WHERE status='complete' AND lifecycle IN ('active','restored') ORDER BY id").all();
+      : "SELECT * FROM sources WHERE status='complete' AND lifecycle IN ('active','restored') ORDER BY id").iterate();
+  }
+
+  completedSources(options = {}) {
+    return [...this.iterateCompletedSources(options)];
   }
 
   setSourceLifecycle(id, lifecycle) {
@@ -276,50 +280,64 @@ export class Catalog {
     }
   }
 
-  aggregateObservations({ includeFixtures }) {
-    const aggregate = new Map();
-    const mergeRow = (row) => {
-      const fingerprint = Buffer.from(row.fingerprint);
-      const identity = `${fingerprint.toString('hex')}:${row.raw_move}`;
-      let current = aggregate.get(identity);
-      if (!current) {
-        const keyBytes = Buffer.from(row.polyglot_key);
-        current = {
-          fingerprint, keyBuffer: keyBytes, key: keyBytes.readBigUInt64BE(), fen: row.fen,
-          rawMove: Number(row.raw_move), uciMove: row.uci_move, games: 0, wins: 0, draws: 0, losses: 0,
-        };
-        aggregate.set(identity, current);
-      }
-      current.games += Number(row.games);
-      current.wins += Number(row.wins);
-      current.draws += Number(row.draws);
-      current.losses += Number(row.losses);
-    };
+  *iterateAggregateObservationGroups({ includeFixtures }) {
     for (const index of this.existingShardIndexes()) {
       const database = this.shard(index);
-      const localRows = database.prepare(`
-        SELECT o.raw_move,MIN(o.uci_move) AS uci_move,SUM(o.games) AS games,SUM(o.wins) AS wins,
-               SUM(o.draws) AS draws,SUM(o.losses) AS losses,p.fingerprint,p.polyglot_key,p.fen
-        FROM observations o
-        JOIN positions p ON p.fingerprint=o.fingerprint
-        JOIN forge_catalog.sources s ON s.id=o.source_id
-        WHERE s.status='complete' AND s.lifecycle IN ('active','restored') AND s.contribution_mode='additive'
-          AND (? OR s.fixture=0)
-        GROUP BY o.fingerprint,o.raw_move
-      `).all(includeFixtures ? 1 : 0);
-      for (const row of localRows) mergeRow(row);
-      const remoteRows = database.prepare(`
-        SELECT r.raw_move,MIN(r.uci_move) AS uci_move,SUM(r.games) AS games,SUM(r.wins) AS wins,
-               SUM(r.draws) AS draws,SUM(r.losses) AS losses,p.fingerprint,p.polyglot_key,p.fen
-        FROM remote_observations r
-        JOIN positions p ON p.fingerprint=r.fingerprint
-        JOIN forge_catalog.acquisition_datasets d ON d.id=r.dataset_id
-        WHERE d.contribution_mode='authoritative'
-        GROUP BY r.fingerprint,r.raw_move
-      `).all();
-      for (const row of remoteRows) mergeRow(row);
+      const rows = database.prepare(`
+        WITH eligible_observations AS (
+          SELECT o.fingerprint,o.raw_move,o.uci_move,o.games,o.wins,o.draws,o.losses
+          FROM observations o
+          JOIN forge_catalog.sources s ON s.id=o.source_id
+          WHERE s.status='complete' AND s.lifecycle IN ('active','restored')
+            AND s.contribution_mode='additive' AND (? OR s.fixture=0)
+          UNION ALL
+          SELECT r.fingerprint,r.raw_move,r.uci_move,r.games,r.wins,r.draws,r.losses
+          FROM remote_observations r
+          JOIN forge_catalog.acquisition_datasets d ON d.id=r.dataset_id
+          WHERE d.contribution_mode='authoritative'
+        )
+        SELECT e.raw_move,MIN(e.uci_move) AS uci_move,SUM(e.games) AS games,
+               SUM(e.wins) AS wins,SUM(e.draws) AS draws,SUM(e.losses) AS losses,
+               p.fingerprint,p.polyglot_key,p.fen
+        FROM eligible_observations e
+        JOIN positions p ON p.fingerprint=e.fingerprint
+        GROUP BY e.fingerprint,e.raw_move
+        ORDER BY p.polyglot_key,p.fingerprint,e.raw_move
+      `).iterate(includeFixtures ? 1 : 0);
+      let fingerprint = null;
+      let group = [];
+      for (const row of rows) {
+        const nextFingerprint = Buffer.from(row.fingerprint);
+        if (fingerprint && !fingerprint.equals(nextFingerprint)) {
+          yield group;
+          group = [];
+        }
+        fingerprint = nextFingerprint;
+        const keyBytes = Buffer.from(row.polyglot_key);
+        const counts = [row.games, row.wins, row.draws, row.losses].map(Number);
+        if (!counts.every((value) => Number.isSafeInteger(value) && value >= 0)
+            || counts[0] <= 0 || counts[0] !== counts[1] + counts[2] + counts[3]) {
+          throw new Error('Aggregated observation counts are outside the safe integer contract');
+        }
+        group.push({
+          fingerprint: nextFingerprint,
+          keyBuffer: keyBytes,
+          key: keyBytes.readBigUInt64BE(),
+          fen: row.fen,
+          rawMove: Number(row.raw_move),
+          uciMove: row.uci_move,
+          games: counts[0],
+          wins: counts[1],
+          draws: counts[2],
+          losses: counts[3],
+        });
+      }
+      if (group.length) yield group;
     }
-    return [...aggregate.values()];
+  }
+
+  aggregateObservations({ includeFixtures }) {
+    return [...this.iterateAggregateObservationGroups({ includeFixtures })].flat();
   }
 
   hasPublishableObservations({ includeFixtures = true } = {}) {
@@ -406,7 +424,13 @@ export class Catalog {
         (SELECT id FROM acquisition_datasets WHERE contribution_mode='authoritative')`).run();
       const update = this.database.prepare(`UPDATE acquisition_frontier SET published=1 WHERE fingerprint=? AND dataset_id IN
         (SELECT id FROM acquisition_datasets WHERE contribution_mode='authoritative')`);
-      for (const identity of new Set(records.map((record) => record.fingerprint.toString('hex')))) update.run(Buffer.from(identity, 'hex'));
+      let previous = null;
+      for (const record of records) {
+        const fingerprint = Buffer.from(record.fingerprint);
+        if (previous?.equals(fingerprint)) continue;
+        update.run(fingerprint);
+        previous = fingerprint;
+      }
     });
   }
 
@@ -455,11 +479,18 @@ export class Catalog {
     });
   }
 
-  acquisitionEvidence() {
-    return this.database.prepare(`
+  *iterateAcquisitionEvidence() {
+    const rows = this.database.prepare(`
       SELECT id,provider,overlap_domain,contribution_mode,query_digest,query_json,created_at,updated_at
       FROM acquisition_datasets ORDER BY provider,query_digest
-    `).all().map((row) => ({ ...row, id: Number(row.id), query: JSON.parse(row.query_json) }));
+    `).iterate();
+    for (const row of rows) {
+      yield { ...row, id: Number(row.id), query: JSON.parse(row.query_json) };
+    }
+  }
+
+  acquisitionEvidence() {
+    return [...this.iterateAcquisitionEvidence()];
   }
 
   acquisitionDatasetHasObservations(datasetId) {
