@@ -418,6 +418,35 @@ export function buildComponent({
         entrypoints,
       );
     }
+    const dependencyIds = (definition.dependencies ?? []).map((dependency) => {
+      const componentId = typeof dependency === "string"
+        ? dependency
+        : dependency?.component_id;
+      if (typeof componentId !== "string" || !/^[A-Za-z0-9._-]+$/u.test(componentId)) {
+        throw new Error("component dependency identity is invalid");
+      }
+      return componentId;
+    });
+    let installerIntegration;
+    if (definition.installer_integration !== undefined) {
+      installerIntegration = structuredClone(definition.installer_integration);
+      const integrationEntrypoint = installerIntegration.entrypoint;
+      const invocation = installerIntegration.invocation;
+      if (installerIntegration.schema !== "arena_provider_installer_integration_v1"
+          || installerIntegration.schema_version !== 1
+          || typeof integrationEntrypoint !== "string"
+          || !Object.hasOwn(entrypoints, integrationEntrypoint)
+          || JSON.stringify(installerIntegration.arguments) !== JSON.stringify(["--context"])
+          || !/^[A-Za-z0-9._-]+$/u.test(installerIntegration.workspace_name ?? "")
+          || typeof installerIntegration.configure_when_disabled !== "boolean"
+          || invocation?.kind !== "dependency_runtime"
+          || !dependencyIds.includes(invocation.runtime_component_id)
+          || !/^[A-Za-z0-9._-]+$/u.test(invocation.runtime_entrypoint ?? "")
+          || !Array.isArray(installerIntegration.dependency_bindings)
+          || !Array.isArray(installerIntegration.locator_bindings)) {
+        throw new Error("provider installer-integration contract is invalid");
+      }
+    }
     let contractManifest;
     if (definition.contract_manifest !== undefined) {
       contractManifest = normalizedRelative(definition.contract_manifest);
@@ -477,7 +506,13 @@ export function buildComponent({
         ? { manager_integration_api: managerIntegrationApi }
         : {}),
       capabilities: definition.capabilities ?? [],
-      dependencies: definition.dependencies ?? [],
+      dependencies: dependencyIds,
+      ...(installerIntegration
+        ? {
+          installer_integration: installerIntegration,
+          workspace_name: installerIntegration.workspace_name,
+        }
+        : {}),
       ...(definition.default_model ? { default_model: definition.default_model } : {}),
       startup: definition.startup ?? {},
       controls: definition.controls ?? {},

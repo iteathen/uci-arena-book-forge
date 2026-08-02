@@ -47,6 +47,18 @@ test("provider release proves independent target-scoped native reproducibility",
   );
 
   assert.deepEqual(Object.keys(definition.native_toolchain_by_target), ["windows-x86_64"]);
+  assert.equal(
+    definition.entrypoints.installer_integration,
+    "services/book-forge/src/installer_integration.mjs",
+  );
+  assert.equal(
+    definition.installer_integration.invocation.runtime_component_id,
+    "node_runtime.private",
+  );
+  assert.deepEqual(
+    definition.installer_integration.dependency_bindings.map((binding) => binding.name),
+    ["stockfish"],
+  );
   assert.match(workflow, /build\/native-repro/u);
   assert.match(workflow, /provider_stage\/background_service_native_repro/u);
   assert.match(workflow, /provider_stage\/opening_book_repro/u);

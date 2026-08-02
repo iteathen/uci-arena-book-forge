@@ -27,7 +27,29 @@
       {"source": "provider_stage/background_service_native", "target": "services/book-forge/native"}
     ]
   },
-  "entrypoints": {"cli": "services/book-forge/src/cli.mjs"},
+  "entrypoints": {
+    "cli": "services/book-forge/src/cli.mjs",
+    "installer_integration": "services/book-forge/src/installer_integration.mjs"
+  },
+  "installer_integration": {
+    "schema": "arena_provider_installer_integration_v1",
+    "schema_version": 1,
+    "entrypoint": "installer_integration",
+    "invocation": {
+      "kind": "dependency_runtime",
+      "runtime_component_id": "node_runtime.private",
+      "runtime_entrypoint": "node"
+    },
+    "arguments": ["--context"],
+    "workspace_name": "book-forge",
+    "configure_when_disabled": false,
+    "dependency_bindings": [
+      {"name": "stockfish", "component_id": "stockfish.engine", "source": "entrypoint", "entrypoint": "stockfish", "required": true}
+    ],
+    "locator_bindings": [
+      {"name": "lichess_token_path", "kind": "lichess_token_path", "required": false}
+    ]
+  },
   "manager_integration_api": {
     "schema": "uci_arena_manager_service_api_v1",
     "version": "1.0",

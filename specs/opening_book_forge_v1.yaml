@@ -359,6 +359,8 @@ relocatable_install:
     - "Installed startup registrations use packageRoot rather than repositoryRoot."
     - "Stockfish and native helper locations may be supplied by explicit component configuration."
     - "Stockfish resolution belongs to configuration composition: explicit configuration or UCI_ARENA_STOCKFISH wins, then the declared suite component path, then exact executable names in PATH; every selected executable still passes normal UCI interrogation and fingerprinting before authority is granted."
+    - "The component publishes a bounded installer-integration entrypoint that accepts only the versioned installation context, renders Book Forge-owned configuration, and never reads a credential file."
+    - "Installer supplies dependency and saved-locator paths through declared bindings; Installer does not interpret Book Forge configuration fields or acquisition behavior."
 
 validation:
   required:
