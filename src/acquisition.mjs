@@ -141,7 +141,13 @@ export class ExplorerAcquisition {
       polling = true;
       try {
         const permit = await governor.permit(RESOURCE_WORK_CLASSES.ACQUISITION);
-        if (!permit.allowed) { abortReason = permit.reason || 'resource permission revoked'; controller.abort(); }
+        if (!permit.allowed) {
+          abortReason = permit.reason || 'resource permission revoked';
+          controller.abort();
+        }
+      } catch {
+        abortReason = 'resource permission probe failed';
+        controller.abort();
       } finally {
         polling = false;
       }
