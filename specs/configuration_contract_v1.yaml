@@ -1,0 +1,215 @@
+meta:
+  spec_id: book_forge_configuration_contract_v1
+  version: 1
+  status: active
+  owner: book_forge_configuration
+  purpose: >
+    Define the exact, bounded, provider-owned configuration admitted by Book
+    Forge before catalog, acquisition, analysis, publication, startup, or
+    resource-governor behavior begins.
+
+authority:
+  repository: iteathen/uci-arena-book-forge
+  implementation: src/config.mjs
+  schema: uci_arena_book_forge_config_v1
+  broader_contract: specs/opening_book_forge_v1.yaml
+  rules:
+    - This contract controls configuration shape, ranges, paths, and cross-field
+      validation when it is more specific than the broader provider contract.
+    - Unknown configuration fields fail closed instead of being ignored.
+    - A prior product prefix is admitted only for migration when the complete
+      schema token is a bounded identifier ending in _book_forge_config_v1.
+    - Loaded configuration is normalized to the canonical UCI Arena schema
+      before crossing the configuration boundary.
+
+ownership:
+  owns:
+    - schema_migration_and_normalization
+    - exact_field_shape
+    - path_resolution
+    - operational_range_validation
+    - cross_field_resource_validation
+    - credential_path_ownership_validation
+    - deterministic_stockfish_discovery_order
+    - derived_workspace_paths
+    - runtime_capability_presence_flags
+  must_not_own:
+    - acquisition_transport_or_authentication
+    - catalog_state
+    - stockfish_process_lifecycle
+    - snapshot_policy_or_compilation
+    - startup_registration
+    - installer_layout_discovery_beyond_the_declared_suite_root
+
+shape:
+  root_fields:
+    - schema
+    - workspace
+    - policyFile
+    - stockfish
+    - nativeHelper
+    - nativeLauncher
+    - channels
+    - ingestion
+    - analysis
+    - acquisition
+    - pgnAudit
+    - resources
+    - maintenance
+    - daemon
+  nested_fields:
+    channels: [integration, qualified]
+    ingestion:
+      - minimumRating
+      - maximumPly
+      - speeds
+      - chunkGames
+      - maximumChunkRecords
+      - inboxSettleSeconds
+    analysis:
+      - enabled
+      - initialNodes
+      - confirmationNodes
+      - threadsPerWorker
+      - hashMbPerWorker
+      - maximumWorkers
+      - backgroundSipWorkers
+      - backgroundSipEfficiencyCores
+      - backgroundSipDutyCyclePercent
+    acquisition:
+      - enabled
+      - provider
+      - endpoint
+      - tokenFile
+      - variant
+      - speeds
+      - ratings
+      - movesPerPosition
+      - maximumPly
+      - minimumGames
+      - crawlLcbGap
+      - requestIntervalMs
+      - dailyRequestBudget
+      - requestTimeoutMs
+      - resourcePollMs
+      - publishedRefreshDays
+      - frontierRefreshDays
+      - firstPublishPositions
+      - firstPublishMaxMinutes
+      - integrationDebounceMinutes
+    pgnAudit: [enabled]
+    resources:
+      - minimumFreeWorkspaceGb
+      - pauseAvailableMemoryGb
+      - courtesyCpuPercent
+      - idleCpuPercent
+      - priorityProcessNames
+    maintenance:
+      - intervalDays
+      - detailedCohortRetentionMonths
+      - snapshotVersionsPerChannel
+    daemon:
+      - cycleIntervalMs
+      - failureBackoffInitialMs
+      - failureBackoffMaximumMs
+
+ranges:
+  ingestion:
+    minimumRating: {type: integer, minimum: 2000, maximum: 4000}
+    maximumPly: {type: integer, minimum: 1, maximum: 256}
+    speeds: {type: unique_nonempty_subset, values: [rapid, classical]}
+    chunkGames: {type: integer, minimum: 1, maximum: 1000000}
+    maximumChunkRecords: {type: integer, minimum: 1, maximum: 1000000}
+    inboxSettleSeconds: {type: integer, minimum: 0, maximum: 86400}
+  analysis:
+    enabled: {type: boolean}
+    initialNodes: {type: integer, minimum: 1, maximum: 10000000000}
+    confirmationNodes: {type: integer, minimum: initialNodes, maximum: 10000000000}
+    threadsPerWorker: {type: integer, minimum: 1, maximum: 256}
+    hashMbPerWorker: {type: integer, minimum: 1, maximum: 1048576}
+    maximumWorkers: {type: integer, minimum: 1, maximum: 256}
+    backgroundSipWorkers: {type: integer, minimum: 1, maximum: 2}
+    backgroundSipEfficiencyCores: {type: integer, minimum: 1, maximum: 2}
+    backgroundSipDutyCyclePercent: {type: integer, minimum: 1, maximum: 50}
+  acquisition:
+    enabled: {type: boolean}
+    provider: {const: lichess_opening_explorer}
+    endpoint: {const: https://explorer.lichess.org/lichess}
+    tokenFile: {type: external_path_or_empty_when_disabled}
+    variant: {const: standard}
+    speeds: {type: unique_nonempty_subset, values: [rapid, classical]}
+    ratings: {type: unique_nonempty_subset, values: [2000, 2200, 2500]}
+    movesPerPosition: {type: integer, minimum: 1, maximum: 50}
+    maximumPly: {type: integer, minimum: 1, maximum: 256}
+    minimumGames: {type: integer, minimum: 1, maximum: 1000000000}
+    crawlLcbGap: {type: finite_number, exclusive_minimum: 0, maximum: 1}
+    requestIntervalMs: {type: integer, minimum: 5000, maximum: 86400000}
+    dailyRequestBudget: {type: integer, minimum: 1, maximum: 1000000}
+    requestTimeoutMs: {type: integer, minimum: 1000, maximum: 300000}
+    resourcePollMs: {type: integer, minimum: 100, maximum: 2000}
+    publishedRefreshDays: {type: integer, minimum: 1, maximum: 3650}
+    frontierRefreshDays: {type: integer, minimum: 1, maximum: 3650}
+    firstPublishPositions: {type: integer, minimum: 1, maximum: 10000000}
+    firstPublishMaxMinutes: {type: integer, minimum: 1, maximum: 10080}
+    integrationDebounceMinutes: {type: integer, minimum: 0, maximum: 10080}
+  pgnAudit:
+    enabled: {const: false, reason: reserved_but_not_implemented}
+  resources:
+    minimumFreeWorkspaceGb: {type: finite_number, minimum: 0, maximum: 1000000}
+    pauseAvailableMemoryGb: {type: finite_number, minimum: 0, maximum: 1000000}
+    courtesyCpuPercent: {type: integer, minimum: 1, maximum: 100}
+    idleCpuPercent: {type: integer, minimum: courtesyCpuPercent, maximum: 100}
+    priorityProcessNames:
+      type: unique_bounded_executable_basename_list
+      maximum_items: 256
+  maintenance:
+    intervalDays: {type: integer, minimum: 1, maximum: 3650}
+    detailedCohortRetentionMonths: {type: integer, minimum: 1, maximum: 1200}
+    snapshotVersionsPerChannel: {type: integer, minimum: 1, maximum: 1000}
+  daemon:
+    cycleIntervalMs: {type: integer, minimum: 1000, maximum: 86400000}
+    failureBackoffInitialMs: {type: integer, minimum: 1000, maximum: 86400000}
+    failureBackoffMaximumMs:
+      type: integer
+      minimum: failureBackoffInitialMs
+      maximum: 604800000
+
+path_contract:
+  relative_to_config_file:
+    - policyFile
+    - stockfish
+    - nativeHelper
+    - nativeLauncher
+    - acquisition.tokenFile
+  stockfish_resolution_order:
+    - explicit_UCI_ARENA_STOCKFISH
+    - exact_suite_component_path
+    - bounded_absolute_PATH_lookup
+    - exact_suite_component_path_as_visible_unavailable_default
+  credential_rules:
+    - When acquisition is enabled, tokenFile is a non-empty operator-owned path
+      outside packageRoot, suiteRoot, and the Book Forge workspace.
+    - When acquisition is disabled, tokenFile may be empty.
+    - The loader validates only path ownership; it never opens, reads, hashes,
+      copies, logs, or packages credential contents.
+    - A missing external token file remains a visible acquisition-adapter state,
+      not a configuration-parser side effect.
+
+cross_field_rules:
+  - confirmationNodes is not less than initialNodes.
+  - backgroundSipWorkers is not greater than maximumWorkers.
+  - idleCpuPercent is not less than courtesyCpuPercent.
+  - Stockfish may be empty only when analysis is explicitly disabled.
+  - pgnAudit remains false until an implementation contract is published.
+
+acceptance:
+  required:
+    - canonical_and_migrated_schema_tests
+    - unknown_root_and_nested_field_rejection
+    - representative_lower_and_upper_range_rejection
+    - boolean_and_unique_list_type_rejection
+    - cross_field_constraint_tests
+    - external_credential_path_tests
+    - disabled_capability_empty_path_tests
+    - relative_path_resolution_tests
+    - normalized_output_uses_only_canonical_schema
