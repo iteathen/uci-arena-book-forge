@@ -6,27 +6,39 @@
   "additionalProperties": false,
   "required": ["schema"],
   "properties": {
-    "schema": {"type": "string", "pattern": "^[A-Za-z0-9._-]*_book_forge_config_v1$"},
+    "schema": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+_book_forge_config_v1$",
+      "maxLength": 128
+    },
     "workspace": {"type": "string", "minLength": 1},
     "policyFile": {"type": "string", "minLength": 1},
-    "stockfish": {"type": "string", "minLength": 1},
+    "stockfish": {"type": "string"},
     "nativeHelper": {"type": "string", "minLength": 1},
     "nativeLauncher": {"type": "string", "minLength": 1},
     "channels": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {"integration": {"type": "boolean"}, "qualified": {"type": "boolean"}}
+      "properties": {
+        "integration": {"type": "boolean"},
+        "qualified": {"type": "boolean"}
+      }
     },
     "ingestion": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "minimumRating": {"type": "integer", "minimum": 1},
-        "maximumPly": {"type": "integer", "minimum": 1},
-        "speeds": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["rapid", "classical"]}},
-        "chunkGames": {"type": "integer", "minimum": 1},
-        "maximumChunkRecords": {"type": "integer", "minimum": 1},
-        "inboxSettleSeconds": {"type": "number", "minimum": 0}
+        "minimumRating": {"type": "integer", "minimum": 2000, "maximum": 4000},
+        "maximumPly": {"type": "integer", "minimum": 1, "maximum": 256},
+        "speeds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["rapid", "classical"]}
+        },
+        "chunkGames": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "maximumChunkRecords": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "inboxSettleSeconds": {"type": "integer", "minimum": 0, "maximum": 86400}
       }
     },
     "analysis": {
@@ -34,11 +46,11 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {"type": "boolean"},
-        "initialNodes": {"type": "integer", "minimum": 1},
-        "confirmationNodes": {"type": "integer", "minimum": 1},
-        "threadsPerWorker": {"type": "integer", "minimum": 1},
-        "hashMbPerWorker": {"type": "integer", "minimum": 1},
-        "maximumWorkers": {"type": "integer", "minimum": 1},
+        "initialNodes": {"type": "integer", "minimum": 1, "maximum": 10000000000},
+        "confirmationNodes": {"type": "integer", "minimum": 1, "maximum": 10000000000},
+        "threadsPerWorker": {"type": "integer", "minimum": 1, "maximum": 256},
+        "hashMbPerWorker": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "maximumWorkers": {"type": "integer", "minimum": 1, "maximum": 256},
         "backgroundSipWorkers": {"type": "integer", "minimum": 1, "maximum": 2},
         "backgroundSipEfficiencyCores": {"type": "integer", "minimum": 1, "maximum": 2},
         "backgroundSipDutyCyclePercent": {"type": "integer", "minimum": 1, "maximum": 50}
@@ -51,23 +63,33 @@
         "enabled": {"type": "boolean"},
         "provider": {"const": "lichess_opening_explorer"},
         "endpoint": {"const": "https://explorer.lichess.org/lichess"},
-        "tokenFile": {"type": "string", "minLength": 1},
+        "tokenFile": {"type": "string"},
         "variant": {"const": "standard"},
-        "speeds": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["rapid", "classical"]}},
-        "ratings": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": [2000, 2200, 2500]}},
+        "speeds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["rapid", "classical"]}
+        },
+        "ratings": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": [2000, 2200, 2500]}
+        },
         "movesPerPosition": {"type": "integer", "minimum": 1, "maximum": 50},
-        "maximumPly": {"type": "integer", "minimum": 1},
-        "minimumGames": {"type": "integer", "minimum": 1},
-        "crawlLcbGap": {"type": "number", "exclusiveMinimum": 0},
-        "requestIntervalMs": {"type": "integer", "minimum": 5000},
-        "dailyRequestBudget": {"type": "integer", "minimum": 1},
-        "requestTimeoutMs": {"type": "integer", "minimum": 1000},
+        "maximumPly": {"type": "integer", "minimum": 1, "maximum": 256},
+        "minimumGames": {"type": "integer", "minimum": 1, "maximum": 1000000000},
+        "crawlLcbGap": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "requestIntervalMs": {"type": "integer", "minimum": 5000, "maximum": 86400000},
+        "dailyRequestBudget": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "requestTimeoutMs": {"type": "integer", "minimum": 1000, "maximum": 300000},
         "resourcePollMs": {"type": "integer", "minimum": 100, "maximum": 2000},
-        "publishedRefreshDays": {"type": "integer", "minimum": 1},
-        "frontierRefreshDays": {"type": "integer", "minimum": 1},
-        "firstPublishPositions": {"type": "integer", "minimum": 1},
-        "firstPublishMaxMinutes": {"type": "number", "exclusiveMinimum": 0},
-        "integrationDebounceMinutes": {"type": "number", "minimum": 0}
+        "publishedRefreshDays": {"type": "integer", "minimum": 1, "maximum": 3650},
+        "frontierRefreshDays": {"type": "integer", "minimum": 1, "maximum": 3650},
+        "firstPublishPositions": {"type": "integer", "minimum": 1, "maximum": 10000000},
+        "firstPublishMaxMinutes": {"type": "integer", "minimum": 1, "maximum": 10080},
+        "integrationDebounceMinutes": {"type": "integer", "minimum": 0, "maximum": 10080}
       }
     },
     "pgnAudit": {
@@ -79,30 +101,72 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "minimumFreeWorkspaceGb": {"type": "number", "minimum": 0},
-        "pauseAvailableMemoryGb": {"type": "number", "minimum": 0},
-        "courtesyCpuPercent": {"type": "number", "minimum": 0, "maximum": 100},
-        "idleCpuPercent": {"type": "number", "minimum": 0, "maximum": 100},
-        "priorityProcessNames": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+        "minimumFreeWorkspaceGb": {"type": "number", "minimum": 0, "maximum": 1000000},
+        "pauseAvailableMemoryGb": {"type": "number", "minimum": 0, "maximum": 1000000},
+        "courtesyCpuPercent": {"type": "integer", "minimum": 1, "maximum": 100},
+        "idleCpuPercent": {"type": "integer", "minimum": 1, "maximum": 100},
+        "priorityProcessNames": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+$"
+          }
+        }
       }
     },
     "maintenance": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "intervalDays": {"type": "integer", "minimum": 1},
-        "detailedCohortRetentionMonths": {"type": "integer", "minimum": 1},
-        "snapshotVersionsPerChannel": {"type": "integer", "minimum": 1}
+        "intervalDays": {"type": "integer", "minimum": 1, "maximum": 3650},
+        "detailedCohortRetentionMonths": {"type": "integer", "minimum": 1, "maximum": 1200},
+        "snapshotVersionsPerChannel": {"type": "integer", "minimum": 1, "maximum": 1000}
       }
     },
     "daemon": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "cycleIntervalMs": {"type": "integer", "minimum": 1000},
-        "failureBackoffInitialMs": {"type": "integer", "minimum": 1000},
-        "failureBackoffMaximumMs": {"type": "integer", "minimum": 1000}
+        "cycleIntervalMs": {"type": "integer", "minimum": 1000, "maximum": 86400000},
+        "failureBackoffInitialMs": {"type": "integer", "minimum": 1000, "maximum": 86400000},
+        "failureBackoffMaximumMs": {"type": "integer", "minimum": 1000, "maximum": 604800000}
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["analysis"],
+        "properties": {
+          "analysis": {
+            "required": ["enabled"],
+            "properties": {"enabled": {"const": false}}
+          }
+        }
+      },
+      "else": {
+        "properties": {"stockfish": {"minLength": 1}}
+      }
+    },
+    {
+      "if": {
+        "required": ["acquisition"],
+        "properties": {
+          "acquisition": {
+            "required": ["enabled"],
+            "properties": {"enabled": {"const": false}}
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "acquisition": {
+            "properties": {"tokenFile": {"minLength": 1}}
+          }
+        }
+      }
+    }
+  ]
 }
