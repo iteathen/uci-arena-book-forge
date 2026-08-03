@@ -304,10 +304,13 @@ export async function runDaemon(catalog, config, {
     throw error;
   } finally {
     clearInterval(heartbeatTimer);
-    governor?.close();
-    if (completedNormally) {
-      catalog.updateDaemonState({ phase: 'stopped', heartbeat_at: new Date().toISOString() });
+    try {
+      governor?.close();
+      if (completedNormally) {
+        catalog.updateDaemonState({ phase: 'stopped', heartbeat_at: new Date().toISOString() });
+      }
+    } finally {
+      await releaseLock();
     }
-    await releaseLock();
   }
 }
