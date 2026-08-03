@@ -305,16 +305,18 @@ function validateAcquisition(config) {
   requireBoolean(value.enabled, 'acquisition.enabled');
   if (value.enabled) requireString(value.tokenFile, 'acquisition.tokenFile');
   if (value.provider !== 'lichess_opening_explorer') {
-    throw new Error('acquisition.provider must be lichess_opening_explorer');
+    throw new Error('Book Forge acquisition configuration requires provider lichess_opening_explorer');
   }
-  if (value.variant !== 'standard') throw new Error('acquisition.variant must be standard');
+  if (value.variant !== 'standard') {
+    throw new Error('Book Forge acquisition configuration requires the standard variant');
+  }
   requireString(value.endpoint, 'acquisition.endpoint');
   let endpoint;
   try { endpoint = new URL(value.endpoint); } catch { endpoint = null; }
   if (endpoint?.origin !== 'https://explorer.lichess.org'
       || endpoint.username || endpoint.password
       || endpoint.pathname !== '/lichess' || endpoint.search || endpoint.hash) {
-    throw new Error('acquisition.endpoint must be exactly https://explorer.lichess.org/lichess');
+    throw new Error('Book Forge acquisition configuration requires endpoint exactly https://explorer.lichess.org/lichess');
   }
   requireUniqueSubset(value.speeds, 'acquisition.speeds', ['rapid', 'classical']);
   requireUniqueSubset(value.ratings, 'acquisition.ratings', [2000, 2200, 2500]);
