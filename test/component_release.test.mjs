@@ -161,6 +161,12 @@ test("provider release proves independent target-scoped native reproducibility",
   assert.match(workflow, /Independent component builds differ:/u);
   assert.match(workflow, /first_path=/u);
   assert.match(workflow, /Independent component provider results differ/u);
+  assert.match(workflow, /contents:\s*write/u);
+  assert.doesNotMatch(workflow, /actions\/(?:upload|download)-artifact/u);
+  assert.match(workflow, /Expected exactly three candidate assets/u);
+  assert.match(workflow, /gh release create[\s\S]*?--target \$env:GITHUB_SHA/u);
+  assert.ok(workflow.indexOf("provider_attestation.mjs verify-bundle")
+    < workflow.indexOf("gh release create"));
   assert.match(nativeCmake, /target_link_options\(uci_arena_background_guard PRIVATE \/Brepro\)/u);
   assert.match(nativeCmake, /target_link_options\(uci_arena_service_launcher PRIVATE \/Brepro\)/u);
 });

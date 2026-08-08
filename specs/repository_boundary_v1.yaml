@@ -22,6 +22,9 @@ github_automation:
     - Exact local check commands and outcomes are recorded before merge.
     - Component release and provenance run only after explicit operator dispatch
       and are not automatically required pull-request status checks.
+    - The dispatched job publishes its verified archive, provider result, and
+      Sigstore bundle directly to one private immutable candidate prerelease;
+      Actions artifact storage is not candidate transport.
 
 contracts:
   component_ids: [book_forge.service, opening_book.standard]
