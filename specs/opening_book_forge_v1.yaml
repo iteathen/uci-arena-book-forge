@@ -342,6 +342,7 @@ windows_startup:
     - "The task allows battery startup because the Book Forge resource governor immediately enters backoff on battery or battery-saver state."
     - "Multiple task instances are forbidden and the daemon lock remains the final single-instance authority."
     - "Installation is idempotent, starts the task immediately by default, writes non-secret registration evidence in the workspace, and never embeds credentials."
+    - "Task Scheduler query XML may omit default-true task and trigger Enabled elements. Startup inspection treats omission as enabled, preserves any explicit false as disabled, and never infers enablement from a running daemon or retained evidence."
     - "start runs the existing task and stop ends its current instance without deleting the registration; either command fails clearly when the task is not registered."
     - "startup uninstall ends the scheduled instance, deletes the task, and removes only Book Forge startup-registration evidence."
   validation:

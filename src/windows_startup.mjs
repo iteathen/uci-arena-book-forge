@@ -119,7 +119,7 @@ export async function queryWindowsStartup(config, { execFileImpl = execFileAsync
       workingDirectory: decodeXmlValue(stdout, 'WorkingDirectory'),
     };
     const enabledValues = [...stdout.matchAll(/<Enabled>(true|false)<\/Enabled>/giu)].map((match) => match[1] === 'true');
-    return { platform: 'windows', installed: true, enabled: enabledValues.length > 0 && enabledValues.every(Boolean), taskName: startupTaskName, action: actual,
+    return { platform: 'windows', installed: true, enabled: enabledValues.every(Boolean), taskName: startupTaskName, action: actual,
       matchesCurrentConfiguration: actual.command === expected.command && actual.arguments === expected.arguments && actual.workingDirectory === expected.workingDirectory };
   } catch (error) {
     if (error.code === 1) return { platform: 'windows', installed: false, enabled: false, taskName: startupTaskName, matchesCurrentConfiguration: false };
