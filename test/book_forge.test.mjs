@@ -42,12 +42,14 @@ async function refreshSnapshotIdentity(directory) {
   const manifestPath = path.join(directory, 'snapshot.manifest.json');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   const contentHash = createHash('sha256');
+  contentHash.update(Buffer.from('uci_arena_book_snapshot_v2\0', 'utf8'));
   for (const name of [
     'strong_rare_v1.bin',
-    'strong_rare_v1.ffstats',
+    'strong_rare_v1.stats',
     'strong_rare_v1.policy',
     'evaluation.audit.jsonl',
   ]) {
+    contentHash.update(Buffer.from(`${name}\0`, 'utf8'));
     const bytes = await readFile(path.join(directory, name));
     manifest.artifacts[name] = createHash('sha256').update(bytes).digest('hex');
     contentHash.update(bytes);
@@ -624,6 +626,17 @@ test('fixture ingestion is idempotent and creates deterministic integration snap
   );
   const first = await buildSnapshot(catalog, config, 'integration');
   const firstBook = await readFile(path.join(first.directory, 'strong_rare_v1.bin'));
+  const firstManifest = JSON.parse(await readFile(
+    path.join(first.directory, 'snapshot.manifest.json'),
+    'utf8',
+  ));
+  assert.equal(firstManifest.schema, 'uci_arena_book_snapshot_v2');
+  assert.deepEqual(Object.keys(firstManifest.artifacts).sort(), [
+    'evaluation.audit.jsonl',
+    'strong_rare_v1.bin',
+    'strong_rare_v1.policy',
+    'strong_rare_v1.stats',
+  ]);
   await rm(first.directory, { recursive: true, force: true });
   const second = await buildSnapshot(catalog, config, 'integration');
   assert.equal(second.id, first.id);

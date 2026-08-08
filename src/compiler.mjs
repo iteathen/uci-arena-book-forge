@@ -16,6 +16,13 @@ const maximumManifestBytes = 1_048_576;
 const maximumPolicyBytes = 1_048_576;
 const maximumProvenanceBytes = 524_288;
 const artifactBufferBytes = 1_048_576;
+const snapshotSchema = 'uci_arena_book_snapshot_v2';
+const snapshotArtifacts = Object.freeze([
+  'strong_rare_v1.bin',
+  'strong_rare_v1.stats',
+  'strong_rare_v1.policy',
+  'evaluation.audit.jsonl',
+]);
 
 async function requireRegularFile(filename, maximumBytes, exactBytes = null) {
   const details = await lstat(filename);
@@ -507,7 +514,7 @@ function collectSourceEvidence(catalog, includeFixtures) {
 function validatePublishedRecord(record) {
   for (const value of [record.games, record.wins, record.draws, record.losses]) {
     if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff) {
-      throw new Error('Observation counts exceed the ffstats u32 contract');
+      throw new Error('Observation counts exceed the book-stats u32 contract');
     }
   }
   if (record.games <= 0 || record.games !== record.wins + record.draws + record.losses) {
@@ -645,17 +652,13 @@ async function writeAuditArtifact(store, filename, recordCount) {
 }
 
 async function hashSnapshotArtifacts(directory, provenanceBytes) {
-  const names = [
-    'strong_rare_v1.bin',
-    'strong_rare_v1.ffstats',
-    'strong_rare_v1.policy',
-    'evaluation.audit.jsonl',
-  ];
   const contentHash = createHash('sha256');
+  contentHash.update(Buffer.from(`${snapshotSchema}\0`, 'utf8'));
   const artifactDigests = {};
   let bookFnv = 0xcbf29ce484222325n;
-  for (const name of names) {
+  for (const name of snapshotArtifacts) {
     const artifactHash = createHash('sha256');
+    contentHash.update(Buffer.from(`${name}\0`, 'utf8'));
     for await (const chunk of createReadStream(path.join(directory, name))) {
       artifactHash.update(chunk);
       contentHash.update(chunk);
@@ -757,7 +760,7 @@ export async function buildSnapshot(catalog, config, channel = 'integration') {
     const metrics = metricsStore.finalize();
     await writeStatsArtifact(
       candidates,
-      path.join(artifactDirectory, 'strong_rare_v1.ffstats'),
+      path.join(artifactDirectory, 'strong_rare_v1.stats'),
       bookSummary.fnv,
       selectedCount,
     );
@@ -788,7 +791,7 @@ export async function buildSnapshot(catalog, config, channel = 'integration') {
     const snapshotId = `${channel}-${contentIdentity}`;
     const finalDirectory = path.join(config.paths.snapshots, snapshotId);
     const manifest = {
-      schema: 'uci_arena_book_snapshot_v1',
+      schema: snapshotSchema,
       snapshot_id: snapshotId,
       channel,
       record_count: selectedCount,
@@ -946,7 +949,7 @@ export async function validateSnapshot(directory) {
   await requireRegularFile(manifestPath, maximumManifestBytes);
   const manifestBytes = await readFile(manifestPath);
   const manifest = JSON.parse(manifestBytes.toString('utf8'));
-  if (manifest.schema !== 'uci_arena_book_snapshot_v1') throw new Error('Unsupported snapshot manifest schema');
+  if (manifest.schema !== snapshotSchema) throw new Error('Unsupported snapshot manifest schema');
   if (!['integration', 'qualified'].includes(manifest.channel)
       || manifest.qualified !== (manifest.channel === 'qualified')) {
     throw new Error('Invalid snapshot channel metadata');
@@ -962,7 +965,7 @@ export async function validateSnapshot(directory) {
     throw new Error('Snapshot fixture provenance mismatch');
   }
   const bookPath = path.join(directory, 'strong_rare_v1.bin');
-  const statsPath = path.join(directory, 'strong_rare_v1.ffstats');
+  const statsPath = path.join(directory, 'strong_rare_v1.stats');
   const policyPath = path.join(directory, 'strong_rare_v1.policy');
   const auditPath = path.join(directory, 'evaluation.audit.jsonl');
   await Promise.all([
@@ -971,12 +974,7 @@ export async function validateSnapshot(directory) {
     requireRegularFile(policyPath, maximumPolicyBytes),
     requireRegularFile(auditPath, manifest.record_count * 4_096 + 1),
   ]);
-  const expectedArtifacts = [
-    'evaluation.audit.jsonl',
-    'strong_rare_v1.bin',
-    'strong_rare_v1.ffstats',
-    'strong_rare_v1.policy',
-  ];
+  const expectedArtifacts = [...snapshotArtifacts];
   if (!manifest.artifacts || Object.keys(manifest.artifacts).sort().join(',')
       !== expectedArtifacts.sort().join(',')) {
     throw new Error('Snapshot artifact set mismatch');

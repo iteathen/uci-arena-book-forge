@@ -154,12 +154,17 @@ analysis:
     - "One-shot execution remains fail-fast, and irrecoverable configuration, catalog initialization, or singleton-lock failures remain process failures for Task Scheduler to report and restart."
 
 publication:
+  snapshot_schema: uci_arena_book_snapshot_v2
   snapshot_files:
     - strong_rare_v1.bin
-    - strong_rare_v1.ffstats
+    - strong_rare_v1.stats
     - strong_rare_v1.policy
     - snapshot.manifest.json
     - evaluation.audit.jsonl
+  identity_rule: >
+    Snapshot content identity binds the snapshot schema, ordered artifact
+    names, exact artifact bytes, and provenance. Renaming or substituting an
+    artifact therefore creates a new immutable snapshot identity.
   channels:
     integration:
       automatic: true

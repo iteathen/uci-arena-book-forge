@@ -43,7 +43,7 @@ async function main() {
     await mkdir(output, { recursive: true });
     for (const name of [
       "strong_rare_v1.bin",
-      "strong_rare_v1.ffstats",
+      "strong_rare_v1.stats",
       "strong_rare_v1.policy",
       "snapshot.manifest.json",
       "evaluation.audit.jsonl",
