@@ -17,6 +17,12 @@ on:
         type: choice
         required: true
         options: [windows-x86_64, linux-x86_64]
+      runner:
+        description: Release runner authority
+        type: choice
+        required: true
+        default: github-hosted
+        options: [github-hosted, ephemeral-self-hosted-windows]
 
 permissions:
   contents: read
@@ -27,7 +33,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ${{ inputs.target == 'windows-x86_64' && 'windows-latest' || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner == 'ephemeral-self-hosted-windows' && fromJSON('["self-hosted","Windows","X64","ephemeral","uci-suite","book-forge-release"]') || (inputs.target == 'windows-x86_64' && 'windows-latest' || 'ubuntu-latest') }}
     permissions:
       contents: write
       id-token: write
@@ -57,6 +63,19 @@ jobs:
           }
           if ($env:RELEASE_TARGET -notmatch '^(windows-x86_64|linux-x86_64)$') {
             throw 'unsupported target'
+          }
+          if ('${{ inputs.runner }}' -eq 'ephemeral-self-hosted-windows' -and
+              $env:RELEASE_TARGET -ne 'windows-x86_64') {
+            throw 'ephemeral self-hosted release is Windows-only'
+          }
+      - name: Validate ephemeral Windows release toolchain
+        if: inputs.runner == 'ephemeral-self-hosted-windows'
+        shell: pwsh
+        run: |
+          foreach ($command in @('cl.exe', 'gh.exe', 'git.exe', 'msbuild.exe')) {
+            if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
+              throw "ephemeral release runner is missing $command"
+            }
           }
       - run: npm ci
       - name: Build independent native background helpers
