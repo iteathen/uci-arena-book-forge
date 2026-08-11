@@ -163,6 +163,13 @@ test("provider release proves independent target-scoped native reproducibility",
   assert.match(workflow, /first_path=/u);
   assert.match(workflow, /Independent component provider results differ/u);
   assert.match(workflow, /contents:\s*write/u);
+  assert.match(workflow, /default:\s*github-hosted/u);
+  assert.match(
+    workflow,
+    /\["self-hosted","Windows","X64","ephemeral","uci-suite","book-forge-release"\]/u,
+  );
+  assert.match(workflow, /ephemeral self-hosted release is Windows-only/u);
+  assert.match(workflow, /\('cl\.exe', 'gh\.exe', 'git\.exe', 'msbuild\.exe'\)/u);
   assert.doesNotMatch(workflow, /actions\/(?:upload|download)-artifact/u);
   assert.match(workflow, /Expected exactly three candidate assets/u);
   assert.match(workflow, /gh release create[\s\S]*?--target \$env:GITHUB_SHA/u);
