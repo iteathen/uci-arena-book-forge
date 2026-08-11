@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -1126,6 +1126,86 @@ test('maintenance enforces snapshot retention when monthly compaction is not due
   assert.equal(catalog.channel('integration').snapshot_id, 'integration-00000000000000000005');
   await assert.rejects(stat(directories[0]), /ENOENT/);
   await assert.rejects(stat(directories[1]), /ENOENT/);
+});
+
+test('atomic workspace relocation rebases only catalog-owned paths', async (t) => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'book-forge-relocation-'));
+  let currentCatalog = null;
+  t.after(async () => {
+    currentCatalog?.close();
+    await rm(parent, { recursive: true, force: true });
+  });
+  const previousRoot = path.join(parent, 'previous');
+  const currentRoot = path.join(parent, 'current');
+  const previousConfig = await loadConfig({ workspace: previousRoot });
+  const previousCatalog = new Catalog(previousConfig);
+  const snapshotId = 'integration-0123456789abcdefabcd';
+  const snapshotDirectory = path.join(previousConfig.paths.snapshots, snapshotId);
+  const channelDirectory = path.join(previousConfig.paths.published, 'integration');
+  const internalSource = path.join(previousConfig.paths.inbox, 'internal.pgn');
+  const externalSource = path.join(parent, 'external.pgn');
+  await mkdir(snapshotDirectory, { recursive: true });
+  await mkdir(channelDirectory, { recursive: true });
+  await writeFile(internalSource, 'internal');
+  const internal = previousCatalog.registerSource({
+    sha256: '1'.repeat(64), sourcePath: internalSource, sourceType: 'pgn',
+  });
+  const external = previousCatalog.registerSource({
+    sha256: '2'.repeat(64), sourcePath: externalSource, sourceType: 'pgn',
+  });
+  previousCatalog.recordInboxFile({
+    sourcePath: internalSource, byteSize: 8, modifiedMs: 1, sha256: '1'.repeat(64), sourceId: internal.id,
+  });
+  previousCatalog.addSnapshot({
+    id: snapshotId, channel: 'integration', directory: snapshotDirectory, recordCount: 1,
+    includesFixture: false, qualified: false, manifestSha256: '3'.repeat(64),
+  });
+  previousCatalog.setChannel('integration', snapshotId, channelDirectory);
+  previousCatalog.database.prepare("DELETE FROM metadata WHERE key='workspace_root'").run();
+  previousCatalog.close();
+
+  await rename(previousRoot, currentRoot);
+  const currentConfig = await loadConfig({ workspace: currentRoot });
+  currentConfig.maintenance.snapshotVersionsPerChannel = 4;
+  currentCatalog = new Catalog(currentConfig);
+  assert.equal(currentCatalog.metadata('workspace_root'), path.resolve(currentRoot));
+  assert.equal(currentCatalog.snapshot(snapshotId).directory, path.join(currentConfig.paths.snapshots, snapshotId));
+  assert.equal(currentCatalog.channel('integration').directory, path.join(currentConfig.paths.published, 'integration'));
+  assert.equal(currentCatalog.source(internal.id).source_path, path.join(currentConfig.paths.inbox, 'internal.pgn'));
+  assert.equal(currentCatalog.inboxFile(path.join(currentConfig.paths.inbox, 'internal.pgn')).source_id, internal.id);
+  assert.equal(currentCatalog.source(external.id).source_path, externalSource);
+  currentCatalog.setMetadata('last_maintenance_at', new Date().toISOString());
+  const maintenance = await runMaintenance(currentCatalog, currentConfig);
+  assert.equal(maintenance.snapshotsPruned, 0);
+});
+
+test('incomplete workspace relocation fails closed without changing catalog paths', async (t) => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'book-forge-relocation-failure-'));
+  let database = null;
+  t.after(async () => {
+    database?.close();
+    await rm(parent, { recursive: true, force: true });
+  });
+  const previousRoot = path.join(parent, 'previous');
+  const currentRoot = path.join(parent, 'current');
+  const previousConfig = await loadConfig({ workspace: previousRoot });
+  const previousCatalog = new Catalog(previousConfig);
+  const snapshotId = 'integration-fedcba9876543210abcd';
+  const snapshotDirectory = path.join(previousConfig.paths.snapshots, snapshotId);
+  await mkdir(snapshotDirectory, { recursive: true });
+  previousCatalog.addSnapshot({
+    id: snapshotId, channel: 'integration', directory: snapshotDirectory, recordCount: 1,
+    includesFixture: false, qualified: false, manifestSha256: '4'.repeat(64),
+  });
+  previousCatalog.close();
+  await rename(previousRoot, currentRoot);
+  await rm(path.join(currentRoot, 'snapshots', snapshotId), { recursive: true, force: true });
+  const currentConfig = await loadConfig({ workspace: currentRoot });
+
+  assert.throws(() => new Catalog(currentConfig), /Relocated snapshot .* is missing/);
+  database = new DatabaseSync(currentConfig.paths.catalog);
+  assert.equal(database.prepare('SELECT directory FROM snapshots WHERE id=?').get(snapshotId).directory, snapshotDirectory);
+  assert.equal(database.prepare("SELECT value FROM metadata WHERE key='workspace_root'").get().value, path.resolve(previousRoot));
 });
 
 test('configured Stockfish passes persistent UCI interrogation and returns candidate analysis', async (t) => {

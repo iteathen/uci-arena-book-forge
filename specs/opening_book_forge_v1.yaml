@@ -377,6 +377,8 @@ relocatable_install:
     - "Stockfish resolution belongs to configuration composition: explicit configuration or UCI_ARENA_STOCKFISH wins, then the declared suite component path, then exact executable names in PATH; every selected executable still passes normal UCI interrogation and fingerprinting before authority is granted."
     - "The component artifact declares Book Forge discovery as an active-root resource; Installer and Manager never infer that role from its component id."
     - "The component manifest declares product_data as its suite workspace placement. A conforming Installer resolves that placement beneath its mutable per-user or per-machine product data root, while standalone Book Forge retains its own platform default and explicit --workspace override."
+    - "After an exact atomic workspace relocation, Book Forge owns rebasing catalog paths that were descendants of the prior workspace; it records the active workspace root, leaves external source paths unchanged, and applies all catalog path updates in one transaction."
+    - "A legacy catalog may infer one prior workspace root only from structurally valid snapshot paths. Relocation fails closed when prior-root evidence is absent or ambiguous, the prior workspace still exists, a catalog-owned path escapes the inferred root, or a required relocated snapshot or published directory is missing or linked."
     - "The component publishes a bounded installer-integration entrypoint that accepts only the versioned installation context, renders Book Forge-owned configuration, and never reads a credential file."
     - "Installer supplies dependency and saved-locator paths through declared bindings; Installer does not interpret Book Forge configuration fields or acquisition behavior."
     - "The component manifest declares Book Forge's exact startup action arguments, workspace/configuration flags, response envelope, and required configuration-match evidence; Installer executes that data without knowing Book Forge's CLI shape."
@@ -388,6 +390,8 @@ validation:
     - crash_resume_without_count_drift
     - duplicate_source_idempotence
     - deterministic_snapshot_bytes
+    - atomic_workspace_relocation_rebases_only_catalog_owned_paths
+    - ambiguous_or_incomplete_workspace_relocation_fails_closed
     - malformed_or_partial_snapshot_never_becomes_current
     - uci_load_selection_searchmoves_fallback_and_replacement
     - stockfish_fingerprint_and_node_tier_cache_authority

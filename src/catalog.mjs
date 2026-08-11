@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync, lstatSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { shardForKey } from './chess.mjs';
@@ -15,6 +15,38 @@ function transaction(database, action) {
   } catch (error) {
     database.exec('ROLLBACK');
     throw error;
+  }
+}
+
+function pathKey(value) {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function samePath(left, right) {
+  return pathKey(left) === pathKey(right);
+}
+
+function descendantPath(root, candidate) {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  return relative;
+}
+
+function relocatedPath(previousRoot, currentRoot, candidate) {
+  const relative = descendantPath(previousRoot, candidate);
+  return relative ? path.join(currentRoot, relative) : null;
+}
+
+function requireRelocatedDirectory(directory, label) {
+  let details;
+  try {
+    details = lstatSync(directory);
+  } catch (error) {
+    throw new Error(`Relocated ${label} is missing: ${directory}`, { cause: error });
+  }
+  if (!details.isDirectory() || details.isSymbolicLink()) {
+    throw new Error(`Relocated ${label} must be an owned non-link directory: ${directory}`);
   }
 }
 
@@ -125,6 +157,109 @@ export class Catalog {
       throw new Error(`Unsupported catalog schema ${storedVersion.value}`);
     }
     this.shards = new Map();
+    try {
+      this.rebaseRelocatedWorkspace();
+    } catch (error) {
+      this.database.close();
+      throw error;
+    }
+  }
+
+  rebaseRelocatedWorkspace() {
+    const currentRoot = path.resolve(this.config.workspace);
+    const recordedRoot = this.metadata('workspace_root');
+    const snapshots = this.database.prepare('SELECT id,directory FROM snapshots ORDER BY id').all();
+    const outsideSnapshots = snapshots.filter((row) => !descendantPath(currentRoot, row.directory));
+
+    let previousRoot = recordedRoot ? path.resolve(recordedRoot) : null;
+    if (previousRoot && samePath(previousRoot, currentRoot)) {
+      if (outsideSnapshots.length) {
+        throw new Error(`Catalog contains snapshot paths outside its recorded workspace root: ${outsideSnapshots[0].directory}`);
+      }
+      return;
+    }
+
+    if (!previousRoot && outsideSnapshots.length) {
+      const candidates = new Map();
+      for (const snapshot of outsideSnapshots) {
+        const directory = path.resolve(snapshot.directory);
+        const snapshotsDirectory = path.dirname(directory);
+        if (!samePath(path.basename(directory), snapshot.id) || path.basename(snapshotsDirectory).toLowerCase() !== 'snapshots') {
+          throw new Error(`Cannot infer a prior workspace from snapshot path: ${snapshot.directory}`);
+        }
+        const candidate = path.dirname(snapshotsDirectory);
+        candidates.set(pathKey(candidate), candidate);
+      }
+      if (candidates.size !== 1) throw new Error('Cannot infer exactly one prior Book Forge workspace root');
+      [previousRoot] = candidates.values();
+    }
+
+    if (!previousRoot) {
+      this.setMetadata('workspace_root', currentRoot);
+      return;
+    }
+    if (existsSync(previousRoot)) {
+      throw new Error(`Prior Book Forge workspace still exists; refusing catalog rebase: ${previousRoot}`);
+    }
+
+    const snapshotChanges = [];
+    for (const snapshot of snapshots) {
+      if (descendantPath(currentRoot, snapshot.directory)) continue;
+      const target = relocatedPath(previousRoot, currentRoot, snapshot.directory);
+      if (!target) throw new Error(`Snapshot path is not owned by the prior workspace: ${snapshot.directory}`);
+      if (!samePath(path.basename(target), snapshot.id) || !samePath(path.dirname(target), this.config.paths.snapshots)) {
+        throw new Error(`Snapshot path does not match its catalog identity: ${snapshot.directory}`);
+      }
+      requireRelocatedDirectory(target, `snapshot ${snapshot.id}`);
+      snapshotChanges.push({ ...snapshot, target });
+    }
+
+    const channels = this.database.prepare('SELECT channel,directory FROM channels ORDER BY channel').all();
+    const channelChanges = [];
+    for (const channel of channels) {
+      if (descendantPath(currentRoot, channel.directory)) continue;
+      const target = relocatedPath(previousRoot, currentRoot, channel.directory);
+      if (!target) throw new Error(`Published channel path is not owned by the prior workspace: ${channel.directory}`);
+      if (!samePath(path.basename(target), channel.channel) || !samePath(path.dirname(target), this.config.paths.published)) {
+        throw new Error(`Published channel path does not match its catalog identity: ${channel.directory}`);
+      }
+      requireRelocatedDirectory(target, `published channel ${channel.channel}`);
+      channelChanges.push({ ...channel, target });
+    }
+
+    const sourceChanges = this.database.prepare('SELECT id,source_path FROM sources ORDER BY id').all()
+      .map((source) => ({ ...source, target: relocatedPath(previousRoot, currentRoot, source.source_path) }))
+      .filter((source) => source.target);
+    const inboxChanges = this.database.prepare('SELECT * FROM inbox_files ORDER BY source_path').all()
+      .map((entry) => ({ ...entry, target: relocatedPath(previousRoot, currentRoot, entry.source_path) }))
+      .filter((entry) => entry.target);
+
+    for (const entry of inboxChanges) {
+      const collision = this.database.prepare('SELECT * FROM inbox_files WHERE source_path=?').get(entry.target);
+      if (collision && (collision.byte_size !== entry.byte_size || collision.modified_ms !== entry.modified_ms ||
+          collision.sha256 !== entry.sha256 || collision.source_id !== entry.source_id)) {
+        throw new Error(`Relocated inbox path conflicts with existing discovery evidence: ${entry.target}`);
+      }
+    }
+
+    transaction(this.database, () => {
+      const updateSnapshot = this.database.prepare('UPDATE snapshots SET directory=? WHERE id=?');
+      const updateChannel = this.database.prepare('UPDATE channels SET directory=? WHERE channel=?');
+      const updateSource = this.database.prepare('UPDATE sources SET source_path=? WHERE id=?');
+      const updateInbox = this.database.prepare('UPDATE inbox_files SET source_path=? WHERE source_path=?');
+      const deleteInbox = this.database.prepare('DELETE FROM inbox_files WHERE source_path=?');
+      for (const snapshot of snapshotChanges) updateSnapshot.run(snapshot.target, snapshot.id);
+      for (const channel of channelChanges) updateChannel.run(channel.target, channel.channel);
+      for (const source of sourceChanges) updateSource.run(source.target, source.id);
+      for (const entry of inboxChanges) {
+        if (this.database.prepare('SELECT 1 FROM inbox_files WHERE source_path=?').get(entry.target)) deleteInbox.run(entry.source_path);
+        else updateInbox.run(entry.target, entry.source_path);
+      }
+      this.database.prepare(`
+        INSERT INTO metadata(key,value) VALUES('workspace_root',?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+      `).run(currentRoot);
+    });
   }
 
   close() {
