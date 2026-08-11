@@ -11,6 +11,8 @@ Lichess Opening Explorer. It queries standard rapid/classical games in the
 frontier through ply 30, and feeds the same local Stockfish and snapshot
 pipeline used by file sources. The token is read only from its configured file
 and is never included in status, logs, task actions, or snapshot provenance.
+The credential adapter accepts only a non-empty regular file of at most 4096
+bytes and rejects control lines without echoing the token.
 
 Requires Node.js 24.15 or newer. Install the locked dependencies with
 `npm ci`.
@@ -55,6 +57,8 @@ idempotent and starts it immediately:
 ```powershell
 node src/cli.mjs startup install --workspace E:\book-forge
 node src/cli.mjs startup status --workspace E:\book-forge
+node src/cli.mjs stop --workspace E:\book-forge
+node src/cli.mjs start --workspace E:\book-forge
 ```
 
 Task Scheduler runs a native Windows GUI-subsystem launcher, which starts the
@@ -64,7 +68,9 @@ exponential backoff from five seconds through five minutes. Task Scheduler
 remains a second fallback if the launcher itself exits. Closing an interactive
 terminal therefore cannot stop Book Forge. The task uses the current absolute
 launcher, Node, CLI, workspace, optional config, and installed package root. To remove the startup entry
-and end its scheduled instance, use `startup uninstall`. `daemon --detach`
+and end its scheduled instance, use `startup uninstall`. The `start` and `stop`
+commands control the registered task without creating or deleting it.
+`daemon --detach`
 remains available for temporary sessions that are not managed by Windows.
 
 `pause` and `resume` are durable control commands. The daemon runs at low OS
@@ -94,10 +100,14 @@ heartbeat and exponential retry from five seconds through five minutes;
 one-shot runs and startup/lock/configuration failures remain fail-fast.
 
 `status` includes the current acquisition frontier and request budget plus the
-daemon phase, heartbeat, cycle timestamps, and bounded last-cycle report. The
+startup registration, enablement/configuration state, live daemon activity,
+daemon phase, heartbeat, cycle timestamps, and bounded last-cycle report. A
+retained workspace or registration is not treated as proof of an active
+daemon. The
 native supervisor terminates a daemon whose heartbeat is stale for five
 minutes, allowing Task Scheduler to restart it. Monthly `.pgn.zst` streaming is
-reserved as a default-off audit source; it is not required for Explorer-backed
+reserved as a future default-off audit source; configuration currently rejects
+enabling it rather than advertising a nonfunctional feature. It is not required for Explorer-backed
 book growth and can never contribute overlapping counts to a publication.
 
 The producer is Node-only. On Windows, an optional tiny native resource guard
@@ -124,8 +134,16 @@ source.
 `contracts/service-contract.json` is the installed public boundary. It binds
 the component version, CLI, configuration and status schemas, capabilities,
 startup ownership, status health smoke, data paths, and persistence policy.
+The closed configuration, status, and output JSON Schema documents live beside
+it in `contracts/` and are verified into every provider artifact.
 UCI Arena Manager verifies it against the signed component manifest and keeps
 its digest in the install receipt.
+
+Stockfish resolution is controlled and deterministic: explicit configuration
+or `UCI_ARENA_STOCKFISH` wins, followed by the declared suite component path,
+then an exact `stockfish` executable already present on `PATH`. Every selected
+binary still has to pass UCI interrogation, readiness, `bestmove`, and
+fingerprint checks before it can qualify observations.
 
 The workspace is deliberately separate from installed binaries. It contains
 `catalog.sqlite`, observation shards, source records, the inbox, immutable

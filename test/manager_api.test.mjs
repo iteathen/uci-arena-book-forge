@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 
 import { Catalog } from '../src/catalog.mjs';
+import { buildSnapshot } from '../src/compiler.mjs';
 import { loadConfig } from '../src/config.mjs';
+import { ingestSource, registerInput } from '../src/ingest.mjs';
 import {
+  apiError,
   describeApi,
   inspectOutputApi,
   listOutputsApi,
@@ -17,6 +20,7 @@ import {
   validateConfigApi,
 } from '../src/manager_api.mjs';
 import { validatedManagerIntegrationApi } from '../tools/release/component_release.mjs';
+import { publishSnapshot } from '../src/publisher.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -39,9 +43,36 @@ test('Manager API describes a stable one-way JSON contract', async (t) => {
   assert.equal(description.component_id, 'book_forge.service');
   assert.deepEqual(description.payload.invocation, ['api']);
   assert.ok(description.payload.operations.includes('outputs_list'));
-  assert.equal(statusApi(catalog).payload.status.schema, 'uci_arena_book_forge_status_v2');
+  const status = await statusApi(catalog, config, async () => ({
+    platform: 'windows', installed: true, enabled: true,
+    matchesCurrentConfiguration: true,
+  }));
+  assert.equal(status.payload.status.schema, 'uci_arena_book_forge_status_v2');
+  assert.equal(status.payload.status.daemon.active, false);
+  assert.deepEqual(status.payload.status.startup, {
+    platform: 'windows', inspection: 'available', inspectionReason: '', registered: true, enabled: true,
+    serviceManagerActive: null, daemonActive: false, matchesCurrentConfiguration: true,
+  });
+  const statusSchema = JSON.parse(await readFile(new URL('../contracts/status-schema.json', import.meta.url), 'utf8'));
+  assert.deepEqual(Object.keys(status.payload.status).sort(), [...statusSchema.required].sort());
+  assert.deepEqual(Object.keys(status.payload.status.startup).sort(),
+    [...statusSchema.properties.startup.required].sort());
   assert.equal(validateConfigApi(config).payload.valid, true);
   assert.equal(Object.hasOwn(validateConfigApi(config).payload, 'token_file'), false);
+  assert.deepEqual(description.payload.schema_documents, {
+    configuration: 'contracts/configuration-schema.json',
+    status: 'contracts/status-schema.json',
+    output: 'contracts/output-schema.json',
+  });
+});
+
+test('Manager API errors are bounded, single-line, and redact authorization values', () => {
+  const response = apiError('status', new Error(`failed\nAuthorization: Bearer ${'s'.repeat(800)}`));
+  assert.equal(response.ok, false);
+  assert.ok(response.error.message.length <= 512);
+  assert.doesNotMatch(response.error.message, /\n/u);
+  assert.doesNotMatch(response.error.message, /s{20}/u);
+  assert.match(response.error.message, /Bearer <redacted>/u);
 });
 
 test('Manager API empty output cursor is stable and rejects malformed requests', async (t) => {
@@ -81,6 +112,20 @@ test('Manager API rejects a catalog output path outside the snapshot root', asyn
     listOutputsApi(catalog, config),
     /escapes the declared snapshot root/,
   );
+});
+
+test('Manager API rejects a snapshot-root junction that resolves outside provider ownership', async (t) => {
+  const { catalog, config } = await fixture(t);
+  const outside = path.join(config.workspace, 'external-output');
+  const linked = path.join(config.paths.snapshots, 'integration-0123456789abcdefabcd');
+  await mkdir(outside, { recursive: true });
+  await symlink(outside, linked, process.platform === 'win32' ? 'junction' : 'dir');
+  catalog.addSnapshot({
+    id: 'integration-0123456789abcdefabcd', channel: 'integration', directory: linked,
+    recordCount: 1, includesFixture: true, qualified: false, manifestSha256: '0'.repeat(64),
+  });
+  catalog.setChannel('integration', 'integration-0123456789abcdefabcd', linked);
+  await assert.rejects(listOutputsApi(catalog, config), /escapes the declared snapshot root/u);
 });
 
 test('Manager API discovery never traverses retained historical snapshots', async (t) => {
@@ -148,6 +193,16 @@ test('provider definition advertises the same Manager API contract', async () =>
     serviceContract.manager_integration_api,
   );
   assert.equal(definition.manager_integration_api.entrypoint, 'cli');
+  assert.deepEqual(definition.controls, serviceContract.controls);
+  assert.deepEqual(definition.schema_documents, serviceContract.schema_documents);
+  for (const [role, relative] of Object.entries(serviceContract.schema_documents)) {
+    const schema = JSON.parse(await readFile(new URL(`../${relative}`, import.meta.url), 'utf8'));
+    const expectedId = role === 'configuration' ? serviceContract.configuration_schema
+      : role === 'status' ? serviceContract.status_schema
+        : serviceContract.manager_integration_api.output_schema;
+    assert.equal(schema.$id, expectedId);
+    assert.equal(schema.additionalProperties, false);
+  }
   assert.deepEqual(
     validatedManagerIntegrationApi(
       definition.manager_integration_api,
@@ -175,6 +230,40 @@ test('installed CLI API works from an unrelated working directory', async (t) =>
   assert.equal(response.schema, 'uci_arena_manager_service_api_v1');
   assert.equal(response.operation, 'describe');
   assert.equal(response.ok, true);
+});
+
+test('Manager API opening-book output matches its closed packaged schema surface', async (t) => {
+  const { catalog, config } = await fixture(t);
+  const source = await registerInput(catalog, { fixtureId: 'bootstrap_v1' });
+  await ingestSource(catalog, source, config);
+  const snapshot = await buildSnapshot(catalog, config, 'integration');
+  await publishSnapshot(catalog, config, snapshot.directory, 'integration');
+  const response = await listOutputsApi(catalog, config);
+  assert.equal(response.payload.outputs.length, 1);
+  const output = response.payload.outputs[0];
+  const schema = JSON.parse(await readFile(new URL('../contracts/output-schema.json', import.meta.url), 'utf8'));
+  assert.deepEqual(Object.keys(output).sort(), [...schema.required].sort());
+  for (const field of ['state', 'authority', 'compatibility', 'summary', 'artifact']) {
+    assert.deepEqual(Object.keys(output[field]).sort(), [...schema.properties[field].required].sort());
+  }
+});
+
+test('installed CLI status distinguishes startup registration from live daemon activity', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'book-forge-status-cli-'));
+  const cwd = await mkdtemp(path.join(os.tmpdir(), 'book-forge-status-cwd-'));
+  t.after(() => Promise.all([
+    rm(root, { recursive: true, force: true }),
+    rm(cwd, { recursive: true, force: true }),
+  ]));
+  const { stdout } = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.mjs'), 'api', 'status', '--workspace', root,
+  ], { cwd });
+  const response = JSON.parse(stdout);
+  assert.equal(response.operation, 'status');
+  assert.equal(response.payload.status.daemon.active, false);
+  assert.equal(typeof response.payload.status.startup.inspection, 'string');
+  assert.equal(response.payload.status.startup.daemonActive, false);
+  assert.ok([true, false, null].includes(response.payload.status.startup.registered));
 });
 
 test('installed CLI output inspection accepts the canonical named id', async (t) => {

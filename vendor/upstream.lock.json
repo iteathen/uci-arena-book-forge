@@ -1,15 +1,15 @@
 {
   "schema": "uci_arena_upstream_vendor_lock_v1",
   "source_repository": "iteathen/UCI_Arena",
-  "source_commit": "8f2d7fe9b3e2d3484c7b6875ffa61347efb6b771",
+  "source_commit": "a2dd6f2677dfaf44242b5591d91012df4d26f43f",
   "packages": {
-    "@uci-arena/background-service-runtime": "1.0.0"
+    "@uci-arena/background-service-runtime": "1.0.2"
   },
   "files": {
-    "background-service-runtime/native/CMakeLists.txt": "5b622f2edcdd8e78a4b40ef404246c09a34d723c401f904b8fa0edbb81f6967e",
+    "background-service-runtime/native/CMakeLists.txt": "82e86aeefb7c20beffaa7f25cffce48507fa787e49048fec04031f109caba453",
     "background-service-runtime/native/uci_arena_background_guard.cpp": "90aa018a62e8b91b2e63b94646651e7bc680810844fe98e07a14d1ae0226944d",
     "background-service-runtime/native/uci_arena_service_launcher.cpp": "98bb2b182490f30baa23af14a05d26847be0ede3f97361e20d34db620d2fa769",
-    "background-service-runtime/package.json": "ea3187d4670a07513b91659d246b8f8ff4cf19ca38e946a91d11ff019b559d47",
+    "background-service-runtime/package.json": "0b09bc8a02b94aff500d9e0b69096e2b6f27dd92254d9897af4e967be701add8",
     "background-service-runtime/src/background-resource-lease.mjs": "86154073b51d837e5436ce7e8e430b6c3271b3930b00f2ceb7ee7c4b44d2ea3c",
     "background-service-runtime/src/native-resource-helper.mjs": "389067df29454d4ca315dcd7eb89507d1107ea45136fc139bcfc5254a7a210c7",
     "background-service-runtime/src/resource-isolation.mjs": "69c1509a9f44b6da4336bb35059d4a6aec080ba07f6e6f9fc4c11832e997f13e",

@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
 import { readAndValidateTestReceipt } from "./test_receipt.mjs";
+import { readAndValidateNativeToolchainReceipt } from "./native_toolchain_receipt.mjs";
 
 const FORBIDDEN_PARTS = new Set([
   ".git",
@@ -28,6 +29,38 @@ const FORBIDDEN_PARTS = new Set([
   "uploads",
   "tmp",
 ]);
+const FORBIDDEN_WINDOWS_SYSTEM_DLLS = new Set([
+  "advapi32.dll",
+  "bcrypt.dll",
+  "kernel32.dll",
+  "ntdll.dll",
+  "powrprof.dll",
+  "shell32.dll",
+  "ucrtbase.dll",
+  "user32.dll",
+  "ws2_32.dll",
+]);
+
+export function validateWindowsRuntimeOwnership(files, target) {
+  if (target !== "windows-x86_64") return;
+  const forbidden = files.filter(({ path: relative }) => {
+    const normalized = relative.replaceAll("\\", "/").toLowerCase();
+    const basename = path.posix.basename(normalized);
+    return normalized.split("/").some((part) =>
+      part === "system32" || part === "syswow64")
+      || basename.startsWith("api-ms-")
+      || basename.startsWith("ext-ms-")
+      || FORBIDDEN_WINDOWS_SYSTEM_DLLS.has(basename);
+  });
+  if (forbidden.length > 0) {
+    throw new Error(
+      `OS-owned Windows runtime files are forbidden in component payloads: ${forbidden
+        .map(({ path: relative }) => relative)
+        .sort()
+        .join(", ")}`,
+    );
+  }
+}
 
 function parseArguments(argv) {
   const values = {};
@@ -69,6 +102,136 @@ function exactIdentifierSet(value) {
     return null;
   }
   return [...value].sort();
+}
+
+export function validatedDiscovery(candidate, entrypoints, files) {
+  if (!Array.isArray(candidate) || candidate.length === 0 || candidate.length > 16) {
+    throw new Error("component discovery declaration is invalid");
+  }
+  const kinds = new Set();
+  return candidate.map((entry) => {
+    if (!entry || Object.keys(entry).sort().join(",") !== "kind,locator"
+        || !/^[A-Za-z0-9._-]+$/u.test(entry.kind ?? "")
+        || kinds.has(entry.kind) || !entry.locator || Array.isArray(entry.locator)) {
+      throw new Error("component discovery entry is invalid");
+    }
+    kinds.add(entry.kind);
+    const locator = structuredClone(entry.locator);
+    if (locator.source === "active_root") {
+      if (Object.keys(locator).join(",") !== "source") {
+        throw new Error("active-root discovery locator is invalid");
+      }
+    } else if (locator.source === "entrypoint") {
+      if (Object.keys(locator).sort().join(",") !== "entrypoint,source"
+          || !/^[A-Za-z0-9._-]+$/u.test(locator.entrypoint ?? "")
+          || !Object.hasOwn(entrypoints, locator.entrypoint)) {
+        throw new Error("entrypoint discovery locator is invalid");
+      }
+    } else if (locator.source === "component_path") {
+      if (Object.keys(locator).sort().join(",") !== "path,source") {
+        throw new Error("component-path discovery locator is invalid");
+      }
+      locator.path = normalizedRelative(locator.path);
+      if (!files.some((file) => file.path === locator.path
+          || file.path.startsWith(`${locator.path}/`))) {
+        throw new Error("component-path discovery locator is unlisted");
+      }
+    } else {
+      throw new Error("component discovery locator source is invalid");
+    }
+    return { kind: entry.kind, locator };
+  });
+}
+
+export function validatedActivation(candidate, discovery, files) {
+  if (candidate === undefined) return undefined;
+  if (!Array.isArray(candidate) || candidate.length === 0 || candidate.length > 4) {
+    throw new Error("component activation declaration is invalid");
+  }
+  const kinds = new Set();
+  const sources = [];
+  const destinations = [];
+  const overlaps = (left, right) => left === right
+    || left.startsWith(`${right}/`)
+    || right.startsWith(`${left}/`);
+  return candidate.map((entry) => {
+    if (!entry
+        || Object.keys(entry).sort().join(",")
+          !== "destination_path,destination_root,kind,source_path"
+        || !["opening_book", "syzygy"].includes(entry.kind)
+        || kinds.has(entry.kind)
+        || entry.destination_root !== "knowledge_root") {
+      throw new Error("component activation entry is invalid");
+    }
+    const sourcePath = normalizedRelative(entry.source_path);
+    const destinationPath = normalizedRelative(entry.destination_path);
+    if (!files.some((file) => file.path.startsWith(`${sourcePath}/`))) {
+      throw new Error("component activation source is unlisted");
+    }
+    if (sources.some((existing) => overlaps(existing, sourcePath))
+        || destinations.some((existing) => overlaps(existing, destinationPath))) {
+      throw new Error("component activation paths overlap");
+    }
+    if (!discovery.some((declaration) => declaration.kind === entry.kind
+        && declaration.locator.source === "component_path"
+        && declaration.locator.path === sourcePath)) {
+      throw new Error("component activation has no matching discovery declaration");
+    }
+    kinds.add(entry.kind);
+    sources.push(sourcePath);
+    destinations.push(destinationPath);
+    return {
+      kind: entry.kind,
+      source_path: sourcePath,
+      destination_root: "knowledge_root",
+      destination_path: destinationPath,
+    };
+  });
+}
+
+function validateServiceSchemaDocuments({ contract, definition, entrypoints, files, staging }) {
+  const contractDocuments = contract.schema_documents;
+  if (JSON.stringify(contractDocuments ?? null) !== JSON.stringify(definition.schema_documents ?? null)) {
+    throw new Error('service schema documents do not match the provider definition');
+  }
+  const expected = {
+    configuration: contract.configuration_schema,
+    status: contract.status_schema,
+    output: contract.manager_integration_api?.output_schema,
+  };
+  if (!contractDocuments || Object.keys(contractDocuments).sort().join(',') !== Object.keys(expected).sort().join(',')) {
+    throw new Error('service contract must declare configuration, status, and output schema documents');
+  }
+  const cliRoot = path.posix.dirname(path.posix.dirname(normalizedRelative(entrypoints.cli)));
+  for (const [role, schemaId] of Object.entries(expected)) {
+    const document = normalizedRelative(contractDocuments[role]);
+    const payloadPath = normalizedRelative(path.posix.join(cliRoot, document));
+    if (!files.some((file) => file.path === payloadPath)) {
+      throw new Error(`service ${role} schema document is not in the payload: ${payloadPath}`);
+    }
+    const schema = JSON.parse(readFileSync(path.join(staging, payloadPath), 'utf8'));
+    if (schema.$schema !== 'https://json-schema.org/draft/2020-12/schema' || schema.$id !== schemaId ||
+        schema.type !== 'object' || schema.additionalProperties !== false) {
+      throw new Error(`service ${role} schema document does not close ${schemaId}`);
+    }
+  }
+}
+
+function validateServiceControls(contract, definition) {
+  if (JSON.stringify(contract.controls ?? null) !== JSON.stringify(definition.controls ?? null)) {
+    throw new Error('service controls do not match the provider definition');
+  }
+  const expectedControls = ['pause', 'resume', 'start', 'startup_install', 'startup_uninstall', 'stop'];
+  if (!contract.controls || Object.keys(contract.controls).sort().join(',') !== expectedControls.join(',')) {
+    throw new Error('service lifecycle controls are incomplete');
+  }
+  for (const [name, control] of Object.entries(contract.controls)) {
+    if (!Array.isArray(control.arguments) || control.arguments.length === 0 ||
+        control.arguments.some((argument) => typeof argument !== 'string' || !/^[a-z-]+$/u.test(argument)) ||
+        typeof control.registration_mutation !== 'boolean' || !contract.capabilities.includes(name)) {
+      throw new Error(`invalid service lifecycle control: ${name}`);
+    }
+  }
 }
 
 export function validatedManagerIntegrationApi(candidate, entrypoints) {
@@ -231,6 +394,7 @@ export function buildComponent({
   sourceDateEpoch,
   workflowIdentity,
   testReceiptPath,
+  nativeToolchainReceiptPath,
   allowDirty = false,
 }) {
   const definition = JSON.parse(readFileSync(definitionPath, "utf8"));
@@ -268,6 +432,23 @@ export function buildComponent({
     sourceCommit: identity.commit,
     workflowIdentity,
   });
+  const nativeToolchainRequired = definition.native_toolchain !== undefined
+    || definition.native_toolchain_by_target?.[target] !== undefined;
+  let nativeToolchainEvidence;
+  if (nativeToolchainRequired) {
+    if (!nativeToolchainReceiptPath) {
+      throw new Error("native provider components require an exact toolchain receipt");
+    }
+    nativeToolchainEvidence = readAndValidateNativeToolchainReceipt({
+      filename: nativeToolchainReceiptPath,
+      definition,
+      target,
+      sourceCommit: identity.commit,
+      workflowIdentity,
+    });
+  } else if (nativeToolchainReceiptPath) {
+    throw new Error("non-native provider component received a native toolchain receipt");
+  }
   const releaseRoot = path.resolve(outputDirectory);
   definition.target_triple = target;
   const staging = path.join(
@@ -283,6 +464,7 @@ export function buildComponent({
       sha256: sha256File(path.join(staging, relative)),
       size_bytes: statSync(path.join(staging, relative)).size,
     }));
+    validateWindowsRuntimeOwnership(payloadFiles, target);
     const sbom = {
       spdxVersion: "SPDX-2.3",
       dataLicense: "CC0-1.0",
@@ -320,6 +502,48 @@ export function buildComponent({
         definition.manager_integration_api,
         entrypoints,
       );
+    }
+    const dependencyIds = (definition.dependencies ?? []).map((dependency) => {
+      const componentId = typeof dependency === "string"
+        ? dependency
+        : dependency?.component_id;
+      if (typeof componentId !== "string" || !/^[A-Za-z0-9._-]+$/u.test(componentId)) {
+        throw new Error("component dependency identity is invalid");
+      }
+      return componentId;
+    });
+    let installerIntegration;
+    if (definition.installer_integration !== undefined) {
+      installerIntegration = structuredClone(definition.installer_integration);
+      const integrationEntrypoint = installerIntegration.entrypoint;
+      const invocation = installerIntegration.invocation;
+      const startupControl = installerIntegration.startup_control;
+      if (installerIntegration.schema !== "arena_provider_installer_integration_v1"
+          || installerIntegration.schema_version !== 1
+          || typeof integrationEntrypoint !== "string"
+          || !Object.hasOwn(entrypoints, integrationEntrypoint)
+          || JSON.stringify(installerIntegration.arguments) !== JSON.stringify(["--context"])
+          || !/^[A-Za-z0-9._-]+$/u.test(installerIntegration.workspace_name ?? "")
+          || installerIntegration.workspace_placement !== "product_data"
+          || typeof installerIntegration.configure_when_disabled !== "boolean"
+          || invocation?.kind !== "dependency_runtime"
+          || !dependencyIds.includes(invocation.runtime_component_id)
+          || !/^[A-Za-z0-9._-]+$/u.test(invocation.runtime_entrypoint ?? "")
+          || !Array.isArray(installerIntegration.dependency_bindings)
+          || !Array.isArray(installerIntegration.locator_bindings)
+          || startupControl?.schema !== "arena_provider_startup_control_v1"
+          || startupControl.schema_version !== 1
+          || !Object.hasOwn(entrypoints, startupControl.entrypoint)
+          || JSON.stringify(startupControl.actions?.install) !== JSON.stringify(["startup", "install"])
+          || JSON.stringify(startupControl.actions?.uninstall) !== JSON.stringify(["startup", "uninstall"])
+          || startupControl.workspace_argument?.flag !== "--workspace"
+          || startupControl.workspace_argument?.relative_path !== "."
+          || startupControl.configuration_argument !== "--config"
+          || startupControl.result?.envelope !== "startup"
+          || startupControl.result?.require_configuration_match_on_install !== true
+          || startupControl.result?.require_live_on_install !== false) {
+        throw new Error("provider installer-integration contract is invalid");
+      }
     }
     let contractManifest;
     if (definition.contract_manifest !== undefined) {
@@ -365,7 +589,11 @@ export function buildComponent({
           `standalone service contract does not match ${definition.component_id}@${version}`,
         );
       }
+      validateServiceControls(contract, definition);
+      validateServiceSchemaDocuments({ contract, definition, entrypoints, files, staging });
     }
+    const discovery = validatedDiscovery(definition.discovery, entrypoints, files);
+    const activation = validatedActivation(definition.activation, discovery, files);
     const manifest = {
       schema: "arena_install_component_v1",
       schema_version: 1,
@@ -373,14 +601,24 @@ export function buildComponent({
       component_version: version,
       target_triple: target,
       entrypoints,
+      discovery,
+      ...(activation ? { activation } : {}),
       ...(contractManifest ? { contract_manifest: contractManifest } : {}),
       ...(managerIntegrationApi
         ? { manager_integration_api: managerIntegrationApi }
         : {}),
       capabilities: definition.capabilities ?? [],
-      dependencies: definition.dependencies ?? [],
+      dependencies: dependencyIds,
+      ...(installerIntegration
+        ? {
+          installer_integration: installerIntegration,
+          workspace_name: installerIntegration.workspace_name,
+        }
+        : {}),
       ...(definition.default_model ? { default_model: definition.default_model } : {}),
       startup: definition.startup ?? {},
+      controls: definition.controls ?? {},
+      schema_documents: definition.schema_documents ?? {},
       data_paths: definition.data_paths ?? [],
       files,
     };
@@ -424,6 +662,10 @@ export function buildComponent({
         node: process.version,
         platform: process.platform,
         architecture: process.arch,
+        ...(nativeToolchainEvidence ? {
+          native_receipt_sha256: nativeToolchainEvidence.sha256,
+          native_builds: nativeToolchainEvidence.receipt.builds,
+        } : {}),
       },
       dependency_lock_identities: definition.dependency_lock_identities ?? {},
       build_flags: definition.build_flags ?? [],
@@ -461,6 +703,9 @@ function main() {
     sourceDateEpoch: args["source-date-epoch"],
     workflowIdentity: args["workflow-identity"],
     testReceiptPath: path.resolve(args["test-receipt"]),
+    nativeToolchainReceiptPath: args["native-toolchain-receipt"]
+      ? path.resolve(args["native-toolchain-receipt"])
+      : undefined,
     allowDirty: args["allow-dirty"] === "true",
   });
   process.stdout.write(`${JSON.stringify(result.result)}\n`);

@@ -1,4 +1,5 @@
-import { open, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { acquireResourceLease } from '@uci-arena/background-service-runtime/lease';
 import { ExplorerAcquisition } from './acquisition.mjs';
@@ -51,6 +52,7 @@ async function withHeavyLease(factory, work) {
 
 async function acquireLock(config) {
   const filename = path.join(config.paths.locks, 'daemon.lock');
+  const nonce = randomUUID();
   let handle;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -65,7 +67,7 @@ async function acquireLock(config) {
         age = Date.now() - (await stat(filename)).mtimeMs;
       } catch {}
       let alive = age < 10_000;
-      if (!alive && Number.isInteger(lock?.pid)) {
+      if (!alive && Number.isSafeInteger(lock?.pid) && lock.pid > 0) {
         try { process.kill(lock.pid, 0); alive = true; } catch (probeError) { alive = probeError.code === 'EPERM'; }
       }
       if (alive || attempt > 0) throw new Error(`Another Book Forge daemon owns ${filename}`);
@@ -73,10 +75,15 @@ async function acquireLock(config) {
     }
   }
   if (!handle) throw new Error(`Could not acquire Book Forge daemon lock ${filename}`);
-  await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+  await handle.writeFile(JSON.stringify({ pid: process.pid, nonce, startedAt: new Date().toISOString() }));
   return async () => {
     await handle.close();
-    await rm(filename, { force: true });
+    try {
+      const current = JSON.parse(await readFile(filename, 'utf8'));
+      if (current.nonce === nonce) await rm(filename, { force: true });
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
   };
 }
 
@@ -241,7 +248,9 @@ export async function runDaemon(catalog, config, {
     let catalogError = null;
     try { catalog.updateDaemonState({ pid: process.pid, started_at: startedAt, heartbeat_at: now }); }
     catch (error) { catalogError = error; }
-    await writeFile(config.daemonHeartbeatFile, `${JSON.stringify({ pid: process.pid, heartbeatAt: now })}\n`, 'utf8');
+    const temporary = `${config.daemonHeartbeatFile}.${process.pid}.tmp`;
+    await writeFile(temporary, `${JSON.stringify({ pid: process.pid, heartbeatAt: now })}\n`, 'utf8');
+    await rename(temporary, config.daemonHeartbeatFile);
     if (catalogError) throw catalogError;
   };
   await heartbeat();

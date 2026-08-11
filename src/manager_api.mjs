@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { realpath, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { validateSnapshot } from './compiler.mjs';
+import { queryStartup } from './platform_startup.mjs';
 
 const API_SCHEMA = 'uci_arena_manager_service_api_v1';
 const API_VERSION = '1.0';
@@ -34,6 +35,12 @@ function envelope(operation, payload) {
 }
 
 export function apiError(operation, error) {
+  const message = String(error instanceof Error ? error.message : error)
+    .replace(/Bearer\s+\S+/giu, 'Bearer <redacted>')
+    .replace(/[\u0000-\u001f\u007f]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, 512) || 'Book Forge rejected the request';
   return {
     schema: API_SCHEMA,
     api_version: API_VERSION,
@@ -43,14 +50,14 @@ export function apiError(operation, error) {
     ok: false,
     error: {
       code: 'service_api_rejected',
-      message: error instanceof Error ? error.message : String(error),
+      message,
     },
   };
 }
 
-function safeSnapshotRoot(config, directory) {
-  const root = path.resolve(config.paths.snapshots);
-  const resolved = path.resolve(directory);
+async function safeSnapshotRoot(config, directory) {
+  const root = await realpath(path.resolve(config.paths.snapshots));
+  const resolved = await realpath(path.resolve(directory));
   const relative = path.relative(root, resolved);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error('Book Forge output path escapes the declared snapshot root');
@@ -62,7 +69,7 @@ async function outputRecord(catalog, config, row) {
   if (!/^(?:integration|qualified)-[0-9a-f]{20}$/u.test(row.id ?? '')) {
     throw new Error('Book Forge output identity is malformed');
   }
-  const directory = safeSnapshotRoot(config, row.directory);
+  const directory = await safeSnapshotRoot(config, row.directory);
   const validated = await validateSnapshot(directory);
   if (validated.id !== row.id
       || validated.channel !== row.channel
@@ -143,11 +150,52 @@ export function describeApi() {
     output_kinds: [OUTPUT_KIND],
     configuration_schema: 'uci_arena_book_forge_config_v1',
     status_schema: 'uci_arena_book_forge_status_v2',
+    schema_documents: {
+      configuration: 'contracts/configuration-schema.json',
+      status: 'contracts/status-schema.json',
+      output: 'contracts/output-schema.json',
+    },
   });
 }
 
-export function statusApi(catalog) {
-  return envelope('status', { status: catalog.status() });
+export async function publicStatus(catalog, config, queryImpl = queryStartup) {
+  const { schema: _catalogSchema, ...catalogStatus } = catalog.status();
+  const status = { schema: 'uci_arena_book_forge_status_v2', ...catalogStatus };
+  try {
+    const startup = await queryImpl(config);
+    return {
+      ...status,
+      startup: {
+        platform: startup.platform ?? process.platform,
+        inspection: 'available',
+        inspectionReason: '',
+        registered: Boolean(startup.installed),
+        enabled: Boolean(startup.enabled),
+        serviceManagerActive: typeof startup.active === 'boolean' ? startup.active : null,
+        daemonActive: status.daemon.active,
+        matchesCurrentConfiguration: typeof startup.matchesCurrentConfiguration === 'boolean'
+          ? startup.matchesCurrentConfiguration : null,
+      },
+    };
+  } catch {
+    return {
+      ...status,
+      startup: {
+        platform: process.platform,
+        inspection: 'unavailable',
+        inspectionReason: 'platform startup inspection failed',
+        registered: null,
+        enabled: null,
+        serviceManagerActive: null,
+        daemonActive: status.daemon.active,
+        matchesCurrentConfiguration: null,
+      },
+    };
+  }
+}
+
+export async function statusApi(catalog, config, queryImpl = queryStartup) {
+  return envelope('status', { status: await publicStatus(catalog, config, queryImpl) });
 }
 
 export async function listOutputsApi(catalog, config, cursor = '') {

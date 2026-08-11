@@ -4,4 +4,4 @@ dist/
 provider_stage/
 .book-forge/
 *.local.json
-native/build/
+native/

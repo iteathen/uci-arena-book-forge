@@ -106,10 +106,10 @@ function decodeXmlValue(xml, tag) {
     .replaceAll('&lt;', '<').replaceAll('&amp;', '&');
 }
 
-export async function queryWindowsStartup(config) {
+export async function queryWindowsStartup(config, { execFileImpl = execFileAsync } = {}) {
   requireWindows();
   try {
-    const { stdout } = await execFileAsync('schtasks.exe', ['/Query', '/TN', startupTaskName, '/XML'], {
+    const { stdout } = await execFileImpl('schtasks.exe', ['/Query', '/TN', startupTaskName, '/XML'], {
       windowsHide: true, timeout: 10_000, maxBuffer: 1024 * 1024,
     });
     const expected = startupAction(config);
@@ -118,10 +118,11 @@ export async function queryWindowsStartup(config) {
       arguments: decodeXmlValue(stdout, 'Arguments'),
       workingDirectory: decodeXmlValue(stdout, 'WorkingDirectory'),
     };
-    return { installed: true, taskName: startupTaskName, action: actual,
+    const enabledValues = [...stdout.matchAll(/<Enabled>(true|false)<\/Enabled>/giu)].map((match) => match[1] === 'true');
+    return { platform: 'windows', installed: true, enabled: enabledValues.every(Boolean), taskName: startupTaskName, action: actual,
       matchesCurrentConfiguration: actual.command === expected.command && actual.arguments === expected.arguments && actual.workingDirectory === expected.workingDirectory };
   } catch (error) {
-    if (error.code === 1) return { installed: false, taskName: startupTaskName, matchesCurrentConfiguration: false };
+    if (error.code === 1) return { platform: 'windows', installed: false, enabled: false, taskName: startupTaskName, matchesCurrentConfiguration: false };
     throw new Error(`Could not query Windows startup task: ${error.stderr?.trim() || error.message}`);
   }
 }
@@ -157,6 +158,42 @@ export async function installWindowsStartup(config) {
     throw new Error(`Startup task was installed but could not be started: ${error.stderr?.trim() || error.stdout?.trim() || error.message}`);
   }
   return { ...status, started: true, evidencePath };
+}
+
+export async function startWindowsStartup(config, {
+  queryImpl = queryWindowsStartup,
+  execFileImpl = execFileAsync,
+} = {}) {
+  requireWindows();
+  const registered = await queryImpl(config);
+  if (!registered.installed) throw new Error(`Book Forge startup task is not registered: ${startupTaskName}`);
+  try {
+    await execFileImpl('schtasks.exe', ['/Run', '/TN', startupTaskName], {
+      windowsHide: true, timeout: 10_000, maxBuffer: 1024 * 1024,
+    });
+  } catch (error) {
+    throw new Error(`Could not start Windows startup task: ${error.stderr?.trim() || error.stdout?.trim() || error.message}`);
+  }
+  return { ...(await queryImpl(config)), startRequested: true };
+}
+
+export async function stopWindowsStartup(config, {
+  queryImpl = queryWindowsStartup,
+  execFileImpl = execFileAsync,
+} = {}) {
+  requireWindows();
+  const registered = await queryImpl(config);
+  if (!registered.installed) throw new Error(`Book Forge startup task is not registered: ${startupTaskName}`);
+  try {
+    await execFileImpl('schtasks.exe', ['/End', '/TN', startupTaskName], {
+      windowsHide: true, timeout: 10_000, maxBuffer: 1024 * 1024,
+    });
+  } catch (error) {
+    if (error.code !== 1) {
+      throw new Error(`Could not stop Windows startup task: ${error.stderr?.trim() || error.stdout?.trim() || error.message}`);
+    }
+  }
+  return { ...(await queryImpl(config)), stopRequested: true };
 }
 
 export async function uninstallWindowsStartup(config) {

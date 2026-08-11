@@ -1,8 +1,18 @@
 {
   "schema": "arena_provider_component_definition_v1",
   "component_id": "book_forge.service",
+  "discovery": [
+    {"kind": "book_forge", "locator": {"source": "active_root"}}
+  ],
   "source_repository": "iteathen/uci-arena-book-forge",
   "package_json": "package.json",
+  "native_toolchain_by_target": {
+    "windows-x86_64": {
+      "receipt_schema": "arena_native_toolchain_receipt_v1",
+      "build_system": "cmake",
+      "language": "cxx"
+    }
+  },
   "contract_manifest": "services/book-forge/contracts/service-contract.json",
   "include": [
     {"source": "src", "target": "services/book-forge/src"},
@@ -20,7 +30,46 @@
       {"source": "provider_stage/background_service_native", "target": "services/book-forge/native"}
     ]
   },
-  "entrypoints": {"cli": "services/book-forge/src/cli.mjs"},
+  "entrypoints": {
+    "cli": "services/book-forge/src/cli.mjs",
+    "installer_integration": "services/book-forge/src/installer_integration.mjs"
+  },
+  "installer_integration": {
+    "schema": "arena_provider_installer_integration_v1",
+    "schema_version": 1,
+    "entrypoint": "installer_integration",
+    "invocation": {
+      "kind": "dependency_runtime",
+      "runtime_component_id": "node_runtime.private",
+      "runtime_entrypoint": "node"
+    },
+    "arguments": ["--context"],
+    "workspace_name": "book-forge",
+    "workspace_placement": "product_data",
+    "configure_when_disabled": false,
+    "dependency_bindings": [
+      {"name": "stockfish", "component_id": "stockfish.engine", "source": "entrypoint", "entrypoint": "stockfish", "required": true}
+    ],
+    "locator_bindings": [
+      {"name": "lichess_token_path", "kind": "lichess_token_path", "required": false}
+    ],
+    "startup_control": {
+      "schema": "arena_provider_startup_control_v1",
+      "schema_version": 1,
+      "entrypoint": "cli",
+      "actions": {
+        "install": ["startup", "install"],
+        "uninstall": ["startup", "uninstall"]
+      },
+      "workspace_argument": {"flag": "--workspace", "relative_path": "."},
+      "configuration_argument": "--config",
+      "result": {
+        "envelope": "startup",
+        "require_configuration_match_on_install": true,
+        "require_live_on_install": false
+      }
+    }
+  },
   "manager_integration_api": {
     "schema": "uci_arena_manager_service_api_v1",
     "version": "1.0",
@@ -30,11 +79,24 @@
     "operations": ["describe", "status", "outputs_list", "outputs_inspect", "config_validate"],
     "output_schema": "uci_arena_service_output_v1"
   },
+  "schema_documents": {
+    "configuration": "contracts/configuration-schema.json",
+    "status": "contracts/status-schema.json",
+    "output": "contracts/output-schema.json"
+  },
   "dependencies": [
     {"component_id": "node_runtime.private", "required": true, "binding": "private_component_runtime"},
     {"component_id": "stockfish.engine", "required": true, "binding": "explicit_stockfish_path"}
   ],
   "capabilities": ["status", "start", "stop", "pause", "resume", "startup_install", "startup_uninstall"],
+  "controls": {
+    "start": {"arguments": ["start"], "registration_mutation": false},
+    "stop": {"arguments": ["stop"], "registration_mutation": false},
+    "pause": {"arguments": ["pause"], "registration_mutation": false},
+    "resume": {"arguments": ["resume"], "registration_mutation": false},
+    "startup_install": {"arguments": ["startup", "install"], "registration_mutation": true},
+    "startup_uninstall": {"arguments": ["startup", "uninstall"], "registration_mutation": true}
+  },
   "startup": {"windows": "per_user_task_scheduler", "linux": "per_user_systemd"},
   "data_paths": ["workspace"],
   "dependency_lock_identities": {

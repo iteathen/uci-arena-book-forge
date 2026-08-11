@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uci_arena_book_forge_status_v2",
+  "title": "UCI Arena Book Forge status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "workspace", "control", "sources", "channels", "snapshots", "passingQualificationGates", "daemon", "startup", "acquisition", "audit"],
+  "properties": {
+    "schema": {"const": "uci_arena_book_forge_status_v2"},
+    "workspace": {"type": "string", "minLength": 1},
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["singleton", "paused", "reason", "updated_at"],
+      "properties": {
+        "singleton": {"type": "boolean"},
+        "paused": {"type": "boolean"},
+        "reason": {"type": "string", "maxLength": 2048},
+        "updated_at": {"type": "string"}
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["status", "lifecycle", "count", "games"],
+        "properties": {
+          "status": {"enum": ["pending", "processing", "complete", "error"]},
+          "lifecycle": {"enum": ["active", "quarantined", "retired", "restored"]},
+          "count": {"type": "integer", "minimum": 0},
+          "games": {"type": ["integer", "null"], "minimum": 0}
+        }
+      }
+    },
+    "channels": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["channel", "snapshot_id", "directory", "published_at"],
+        "properties": {
+          "channel": {"enum": ["integration", "qualified"]},
+          "snapshot_id": {"type": "string", "pattern": "^(integration|qualified)-[0-9a-f]{20}$"},
+          "directory": {"type": "string", "minLength": 1},
+          "published_at": {"type": "string"}
+        }
+      }
+    },
+    "snapshots": {"type": "integer", "minimum": 0},
+    "passingQualificationGates": {"type": "integer", "minimum": 0},
+    "daemon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "phase", "startedAt", "heartbeatAt", "cycleStartedAt", "cycleCompletedAt", "resourceMode", "lastReport", "lastError", "stale", "processAlive", "active"],
+      "properties": {
+        "pid": {"type": ["integer", "null"], "minimum": 1},
+        "phase": {"enum": ["stopped", "acquisition", "ingestion", "analysis", "publication", "maintenance", "sleep", "recovering", "failed"]},
+        "startedAt": {"type": ["string", "null"]},
+        "heartbeatAt": {"type": ["string", "null"]},
+        "cycleStartedAt": {"type": ["string", "null"]},
+        "cycleCompletedAt": {"type": ["string", "null"]},
+        "resourceMode": {"type": "string"},
+        "lastReport": {"type": "object"},
+        "lastError": {"type": "string", "maxLength": 2048},
+        "stale": {"type": "boolean"},
+        "processAlive": {"type": "boolean"},
+        "active": {"type": "boolean"}
+      }
+    },
+    "startup": {
+      "type": "object", "additionalProperties": false,
+      "required": ["platform", "inspection", "inspectionReason", "registered", "enabled", "serviceManagerActive", "daemonActive", "matchesCurrentConfiguration"],
+      "properties": {
+        "platform": {"enum": ["windows", "linux", "win32"]},
+        "inspection": {"enum": ["available", "unavailable"]},
+        "inspectionReason": {"type": "string", "maxLength": 256},
+        "registered": {"type": ["boolean", "null"]},
+        "enabled": {"type": ["boolean", "null"]},
+        "serviceManagerActive": {"type": ["boolean", "null"]},
+        "daemonActive": {"type": "boolean"},
+        "matchesCurrentConfiguration": {"type": ["boolean", "null"]}
+      }
+    },
+    "acquisition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "provider", "credentialConfigured", "requestsToday", "dailyRequestBudget", "frontier", "positions", "frontierPositions", "lastSuccessAt", "nextRequestAt", "authState", "lastHttpStatus", "backoffReason"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "provider": {"const": "lichess_opening_explorer"},
+        "credentialConfigured": {"type": "boolean"},
+        "requestsToday": {"type": "integer", "minimum": 0},
+        "dailyRequestBudget": {"type": "integer", "minimum": 1},
+        "frontier": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["state", "count"], "properties": {"state": {"enum": ["queued", "in_flight", "ready", "backoff", "auth_blocked"]}, "count": {"type": "integer", "minimum": 0}}}},
+        "positions": {"type": "integer", "minimum": 0},
+        "frontierPositions": {"type": "integer", "minimum": 0},
+        "lastSuccessAt": {"type": ["string", "null"]},
+        "nextRequestAt": {"type": ["string", "null"]},
+        "authState": {"enum": ["ready", "blocked"]},
+        "lastHttpStatus": {"type": ["integer", "null"], "minimum": 100, "maximum": 599},
+        "backoffReason": {"type": "string", "maxLength": 512}
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "status"],
+      "properties": {"enabled": {"const": false}, "status": {"const": "disabled"}}
+    }
+  }
+}

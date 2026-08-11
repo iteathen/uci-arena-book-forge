@@ -13,6 +13,7 @@ import {
   describeApi,
   inspectOutputApi,
   listOutputsApi,
+  publicStatus,
   statusApi,
   validateConfigApi,
 } from './manager_api.mjs';
@@ -21,6 +22,8 @@ import {
   installStartup,
   queryStartup,
   readStartupEvidence,
+  startStartup,
+  stopStartup,
   uninstallStartup,
 } from './platform_startup.mjs';
 
@@ -57,7 +60,7 @@ export function apiOperationFromArguments(argv) {
 async function main() {
   const { positional, options } = parseArguments(process.argv.slice(2));
   const [command, subcommand, argument, detail] = positional;
-  if (!command) throw new Error('Usage: book-forge <init|source <add|quarantine|retire|restore>|acquisition <run|status|retry-auth>|daemon|pause|resume|status|snapshot build|qualification record|maintain|validate|publish|startup <install|status|uninstall>|api <describe|status|outputs <list|inspect>|config validate>>');
+  if (!command) throw new Error('Usage: book-forge <init|source <add|quarantine|retire|restore>|acquisition <run|status|retry-auth>|daemon|start|stop|pause|resume|status|snapshot build|qualification record|maintain|validate|publish|startup <install|status|uninstall>|api <describe|status|outputs <list|inspect>|config validate>>');
   const config = await loadConfig({ configFile: options.config, workspace: options.workspace });
   if (command === 'validate') {
     output({ ok: true, ...(await validateSnapshot(path.resolve(subcommand))) });
@@ -68,7 +71,7 @@ async function main() {
     if (command === 'api' && subcommand === 'describe') {
       output(describeApi());
     } else if (command === 'api' && subcommand === 'status') {
-      output(statusApi(catalog));
+      output(await statusApi(catalog, config));
     } else if (command === 'api' && subcommand === 'outputs' && argument === 'list') {
       output(await listOutputsApi(catalog, config, options.cursor ?? ''));
     } else if (command === 'api' && subcommand === 'outputs' && argument === 'inspect') {
@@ -79,7 +82,8 @@ async function main() {
     } else if (command === 'api' && subcommand === 'config' && argument === 'validate') {
       output(validateConfigApi(config));
     } else if (command === 'init') {
-      output({ ok: true, schema: 'uci_arena_book_forge_init_v1', workspace: config.workspace, status: catalog.status() });
+      output({ ok: true, schema: 'uci_arena_book_forge_init_v1', workspace: config.workspace,
+        status: await publicStatus(catalog, config) });
     } else if (command === 'source' && subcommand === 'add') {
       if (!argument && !options.fixture) throw new Error('source add requires a PGN path or --fixture <id>');
       const source = await registerInput(catalog, { filename: argument, fixtureId: options.fixture });
@@ -110,6 +114,10 @@ async function main() {
       } else {
         output({ ok: true, report: await runDaemon(catalog, config, { once: Boolean(options.once) }) });
       }
+    } else if (command === 'start') {
+      output({ ok: true, lifecycle: await startStartup(config) });
+    } else if (command === 'stop') {
+      output({ ok: true, lifecycle: await stopStartup(config) });
     } else if (command === 'pause') {
       catalog.setPaused(true, options.reason ?? 'operator pause');
       output({ ok: true, control: catalog.control() });
@@ -117,7 +125,7 @@ async function main() {
       catalog.setPaused(false);
       output({ ok: true, control: catalog.control() });
     } else if (command === 'status') {
-      output({ ok: true, status: catalog.status() });
+      output({ ok: true, status: await publicStatus(catalog, config) });
     } else if (command === 'snapshot' && subcommand === 'build') {
       output({ ok: true, snapshot: await buildSnapshot(catalog, config, options.channel ?? 'integration') });
     } else if (command === 'qualification' && subcommand === 'record') {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -10,7 +11,7 @@ import { ExplorerAcquisition, acquisitionQuery, validateExplorerResponse } from 
 import { Catalog } from '../src/catalog.mjs';
 import { canonicalFen, encodePolyglotMove, keyBuffer, polyglotKey, positionFingerprint } from '../src/chess.mjs';
 import { buildSnapshot, validateSnapshot } from '../src/compiler.mjs';
-import { loadConfig } from '../src/config.mjs';
+import { discoverStockfish, loadConfig } from '../src/config.mjs';
 import { runCycle, runDaemon } from '../src/daemon.mjs';
 import { discoverInbox, ingestSource, registerInput } from '../src/ingest.mjs';
 import { runMaintenance } from '../src/maintenance.mjs';
@@ -18,7 +19,7 @@ import { NativeResourceHelper } from '@uci-arena/background-service-runtime/nati
 import { publishSnapshot } from '../src/publisher.mjs';
 import { RESOURCE_WORK_CLASSES, ResourceGovernor } from '../src/resource_governor.mjs';
 import { analyzeObservations, StockfishWorker } from '../src/stockfish.mjs';
-import { buildTaskXml, installWindowsStartup, quoteWindowsArgument, startupAction, startupTaskName } from '../src/windows_startup.mjs';
+import { buildTaskXml, installWindowsStartup, quoteWindowsArgument, startWindowsStartup, startupAction, startupTaskName, stopWindowsStartup } from '../src/windows_startup.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -35,6 +36,30 @@ function cleanCatalog(t, catalog, config) {
     catalog.close();
     await rm(config.workspace, { recursive: true, force: true });
   });
+}
+
+async function refreshSnapshotIdentity(directory) {
+  const manifestPath = path.join(directory, 'snapshot.manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  const contentHash = createHash('sha256');
+  contentHash.update(Buffer.from('uci_arena_book_snapshot_v2\0', 'utf8'));
+  for (const name of [
+    'strong_rare_v1.bin',
+    'strong_rare_v1.stats',
+    'strong_rare_v1.policy',
+    'evaluation.audit.jsonl',
+  ]) {
+    contentHash.update(Buffer.from(`${name}\0`, 'utf8'));
+    const bytes = await readFile(path.join(directory, name));
+    manifest.artifacts[name] = createHash('sha256').update(bytes).digest('hex');
+    contentHash.update(bytes);
+  }
+  contentHash.update(Buffer.from(JSON.stringify({
+    source_evidence: manifest.source_evidence,
+    corpus_filter: manifest.corpus_filter,
+  }), 'utf8'));
+  manifest.snapshot_id = `${manifest.channel}-${contentHash.digest('hex').slice(0, 20)}`;
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 async function isolatedHeavyLease() {
@@ -114,6 +139,28 @@ test('Windows startup task uses a windowless native launcher with absolute paths
   }
 });
 
+test('Windows start and stop controls preserve the existing task registration', async (t) => {
+  if (process.platform !== 'win32') return t.skip('Windows Task Scheduler control test');
+  const config = await workspace(t);
+  t.after(() => rm(config.workspace, { recursive: true, force: true }));
+  const calls = [];
+  const queryImpl = async () => ({ installed: true, taskName: startupTaskName, matchesCurrentConfiguration: true });
+  const execFileImpl = async (executable, argumentsList) => {
+    calls.push({ executable, argumentsList });
+    if (argumentsList[0] === '/End') throw Object.assign(new Error('not running'), { code: 1 });
+    return { stdout: '', stderr: '' };
+  };
+  const started = await startWindowsStartup(config, { queryImpl, execFileImpl });
+  const stopped = await stopWindowsStartup(config, { queryImpl, execFileImpl });
+  assert.equal(started.startRequested, true);
+  assert.equal(stopped.stopRequested, true);
+  assert.deepEqual(calls.map((call) => call.argumentsList.slice(0, 3)), [
+    ['/Run', '/TN', startupTaskName],
+    ['/End', '/TN', startupTaskName],
+  ]);
+  assert.ok(calls.every((call) => call.executable === 'schtasks.exe'));
+});
+
 test('catalog schema three migrates acquisition authority columns without losing sources', async (t) => {
   const config = await workspace(t);
   const legacy = new DatabaseSync(config.paths.catalog);
@@ -160,7 +207,53 @@ test('configuration normalizes prior schema prefixes and forbids redirecting the
     schema: 'uci_arena_book_forge_config_v1', acquisition: { endpoint: 'https://example.com/lichess' },
   }));
   await assert.rejects(loadConfig({ configFile: filename, workspace: first.workspace }), /acquisition configuration/);
+  const unknownFilename = path.join(first.workspace, 'unknown.config.json');
+  await writeFile(unknownFilename, JSON.stringify({
+    schema: 'uci_arena_book_forge_config_v1', acquisition: { inventedFallback: true },
+  }));
+  await assert.rejects(loadConfig({ configFile: unknownFilename, workspace: first.workspace }), /Unknown Book Forge configuration field/);
+  const unavailableAuditFilename = path.join(first.workspace, 'audit.config.json');
+  await writeFile(unavailableAuditFilename, JSON.stringify({
+    schema: 'uci_arena_book_forge_config_v1', pgnAudit: { enabled: true },
+  }));
+  await assert.rejects(loadConfig({ configFile: unavailableAuditFilename, workspace: first.workspace }), /PGN audit is reserved but unavailable/);
   t.after(() => rm(first.workspace, { recursive: true, force: true }));
+});
+
+test('Stockfish composition uses explicit, suite, then bounded PATH discovery precedence', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'book-forge-stockfish-discovery-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const pathRoot = path.join(root, 'path-bin');
+  await mkdir(pathRoot, { recursive: true });
+  const executableName = process.platform === 'win32' ? 'stockfish.exe' : 'stockfish';
+  const pathCandidate = path.join(pathRoot, executableName);
+  await writeFile(pathCandidate, 'probe-only', 'utf8');
+  const explicit = path.join(root, 'explicit-stockfish');
+  assert.equal(discoverStockfish({ environment: { UCI_ARENA_STOCKFISH: explicit, PATH: pathRoot }, root }), path.resolve(explicit));
+  assert.equal(discoverStockfish({ environment: { PATH: pathRoot }, root }), path.resolve(pathCandidate));
+});
+
+test('acquisition rejects oversized credential and response files without exposing credential contents', async (t) => {
+  const config = await workspace(t);
+  config.acquisition.tokenFile = path.join(config.workspace, 'fixture-token.txt');
+  await writeFile(config.acquisition.tokenFile, 'x'.repeat(4_097), 'utf8');
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const acquisition = new ExplorerAcquisition(catalog, config);
+  await assert.rejects(acquisition.credential(), (error) => {
+    assert.equal(error.code, 'BOOK_FORGE_AUTH');
+    assert.equal(error.message, 'Lichess acquisition credential is unavailable');
+    assert.doesNotMatch(error.message, /x{20}/u);
+    return true;
+  });
+
+  await writeFile(config.acquisition.tokenFile, 'fixture-token\n', 'utf8');
+  config.acquisition.dailyRequestBudget = 1;
+  const oversized = new ExplorerAcquisition(catalog, config, {
+    fetchImpl: async () => new Response('x'.repeat(1_048_577), { status: 200 }),
+  });
+  const report = await oversized.run({ permit: async () => ({ allowed: true, mode: 'courtesy' }) }, { maxRequests: 1 });
+  assert.match(report.stopped, /exceeds the 1 MiB contract/u);
 });
 
 test('Explorer acquisition sips validated mover-relative positions and replaces cumulative observations', async (t) => {
@@ -262,6 +355,10 @@ test('Explorer rejects malformed results and fails closed when its credential is
   assert.deepEqual([converted[0].games, converted[0].wins, converted[0].draws, converted[0].losses], [35, 20, 5, 10]);
   assert.throws(() => validateExplorerResponse(black, { white: 0, draws: 0, black: 0,
     moves: [{ uci: 'e2e4', averageRating: 2200, white: 0, draws: 0, black: 0 }] }), /invalid move/);
+  assert.throws(() => validateExplorerResponse(black, {
+    white: 0, draws: 0, black: 0,
+    moves: Array.from({ length: 51 }, () => ({ uci: 'c7c5', averageRating: 2200, white: 0, draws: 0, black: 0 })),
+  }), /requested move bound/);
 
   const config = await workspace(t);
   config.acquisition.tokenFile = path.join(config.workspace, 'missing-token.txt');
@@ -280,16 +377,22 @@ test('Book Forge status exposes bounded daemon heartbeat and acquisition telemet
   const config = await workspace(t);
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
-  catalog.updateDaemonState({ pid: 123, phase: 'acquisition', heartbeat_at: new Date().toISOString(),
+  catalog.updateDaemonState({ pid: process.pid, phase: 'acquisition', heartbeat_at: new Date().toISOString(),
     last_report: { payload: 'x'.repeat(100_000) } });
-  const status = catalog.status();
-  assert.equal(status.schema, 'uci_arena_book_forge_status_v2');
+  let status = catalog.status();
+  assert.equal(status.schema, 'uci_arena_book_forge_catalog_status_v1');
   assert.equal(status.control.singleton, true);
   assert.equal(status.control.paused, false);
-  assert.equal(status.daemon.pid, 123);
+  assert.equal(status.daemon.pid, process.pid);
   assert.equal(status.daemon.phase, 'acquisition');
   assert.equal(status.daemon.stale, false);
+  assert.equal(status.daemon.processAlive, true);
+  assert.equal(status.daemon.active, true);
   assert.equal(status.daemon.lastReport.truncated, true);
+  catalog.updateDaemonState({ pid: 2_147_483_647 });
+  status = catalog.status();
+  assert.equal(status.daemon.processAlive, false);
+  assert.equal(status.daemon.active, false);
   assert.deepEqual(acquisitionQuery(config), {
     variant: 'standard', speeds: ['classical', 'rapid'], ratings: [2000, 2200, 2500],
     moves: 50, topGames: 0, recentGames: 0, history: false,
@@ -301,7 +404,7 @@ test('Explorer rate limits and live resource revocation back off without partial
   config.acquisition.tokenFile = path.join(config.workspace, 'fixture-token.txt');
   config.acquisition.resourcePollMs = 10;
   config.acquisition.requestTimeoutMs = 1_000;
-  config.acquisition.dailyRequestBudget = 2;
+  config.acquisition.dailyRequestBudget = 3;
   await writeFile(config.acquisition.tokenFile, 'fixture-token\n');
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
@@ -323,6 +426,20 @@ test('Explorer rate limits and live resource revocation back off without partial
   assert.equal(catalog.aggregateObservations({ includeFixtures: false }).length, 0);
   assert.ok(permitClasses.length >= 3);
   assert.ok(permitClasses.every((workClass) => workClass === RESOURCE_WORK_CLASSES.ACQUISITION));
+
+  catalog.database.prepare("UPDATE acquisition_frontier SET state='queued',next_due_at=?").run(new Date().toISOString());
+  let failingPermits = 0;
+  const permitFailure = new ExplorerAcquisition(catalog, config, { fetchImpl: async (_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+  }) });
+  const permitFailureReport = await permitFailure.run({
+    permit: async () => {
+      failingPermits += 1;
+      if (failingPermits === 1) return { allowed: true, mode: 'courtesy' };
+      throw new Error('sensitive resource probe detail');
+    },
+  }, { maxRequests: 1 });
+  assert.equal(permitFailureReport.stopped, 'resource permission check failed');
 
   catalog.retryAcquisitionAuth();
   catalog.database.prepare("UPDATE acquisition_frontier SET state='queued',next_due_at=?").run(new Date().toISOString());
@@ -350,6 +467,9 @@ test('one-shot daemon persists a heartbeat and a single bounded cycle report', a
   assert.equal(state.lastReport.acquisition.enabled, false);
   const heartbeat = JSON.parse(await readFile(config.daemonHeartbeatFile, 'utf8'));
   assert.equal(heartbeat.pid, process.pid);
+  const repeated = await runDaemon(catalog, config, { once: true });
+  assert.equal(repeated.acquisition.enabled, false);
+  assert.equal(catalog.daemonState().phase, 'stopped');
 });
 
 test('continuous daemon retries a failed cycle in-process with bounded exponential backoff', async (t) => {
@@ -490,6 +610,10 @@ test('fixture ingestion is idempotent and creates deterministic integration snap
   assert.equal(duplicate.id, source.id);
   await ingestSource(catalog, source, config);
   const firstAggregate = catalog.aggregateObservations({ includeFixtures: true });
+  const streamedAggregate = [...catalog.iterateAggregateObservationGroups({
+    includeFixtures: true,
+  })].flat();
+  assert.deepEqual(streamedAggregate, firstAggregate);
   assert.equal(firstAggregate.length, 6);
   assert.equal(firstAggregate.reduce((sum, row) => sum + row.games, 0), 390);
 
@@ -497,8 +621,22 @@ test('fixture ingestion is idempotent and creates deterministic integration snap
   const replayAggregate = catalog.aggregateObservations({ includeFixtures: true });
   assert.equal(replayAggregate.reduce((sum, row) => sum + row.games, 0), 390);
 
+  catalog.aggregateObservations = () => assert.fail(
+    'snapshot construction must consume the bounded group iterator',
+  );
   const first = await buildSnapshot(catalog, config, 'integration');
   const firstBook = await readFile(path.join(first.directory, 'strong_rare_v1.bin'));
+  const firstManifest = JSON.parse(await readFile(
+    path.join(first.directory, 'snapshot.manifest.json'),
+    'utf8',
+  ));
+  assert.equal(firstManifest.schema, 'uci_arena_book_snapshot_v2');
+  assert.deepEqual(Object.keys(firstManifest.artifacts).sort(), [
+    'evaluation.audit.jsonl',
+    'strong_rare_v1.bin',
+    'strong_rare_v1.policy',
+    'strong_rare_v1.stats',
+  ]);
   await rm(first.directory, { recursive: true, force: true });
   const second = await buildSnapshot(catalog, config, 'integration');
   assert.equal(second.id, first.id);
@@ -511,6 +649,34 @@ test('fixture ingestion is idempotent and creates deterministic integration snap
   const unchanged = await publishSnapshot(catalog, config, first.directory, 'integration');
   assert.equal(unchanged.unchanged, true);
   await assert.rejects(() => buildSnapshot(catalog, config, 'qualified'), /No observations|Qualified publication blocked/);
+  assert.deepEqual(
+    (await readdir(config.paths.snapshots)).filter((name) => name.startsWith('.build-')),
+    [],
+  );
+});
+
+test('failed snapshot construction removes compiler-owned temporary state', async (t) => {
+  const config = await workspace(t);
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const source = await registerInput(catalog, { fixtureId: 'bootstrap_v1' });
+  await ingestSource(catalog, source, config);
+  const firstGroup = catalog.iterateAggregateObservationGroups({
+    includeFixtures: true,
+  }).next().value;
+  catalog.iterateAggregateObservationGroups = function* failAfterFirstGroup() {
+    yield firstGroup;
+    throw new Error('injected catalog cursor failure');
+  };
+
+  await assert.rejects(
+    () => buildSnapshot(catalog, config, 'integration'),
+    /injected catalog cursor failure/,
+  );
+  assert.deepEqual(
+    (await readdir(config.paths.snapshots)).filter((name) => name.startsWith('.build-')),
+    [],
+  );
 });
 
 test('malformed snapshot is rejected before it can replace the published channel', async (t) => {
@@ -525,10 +691,48 @@ test('malformed snapshot is rejected before it can replace the published channel
   const malformed = path.join(config.workspace, 'malformed-snapshot');
   await cp(snapshot.directory, malformed, { recursive: true });
   await writeFile(path.join(malformed, 'strong_rare_v1.bin'), Buffer.alloc(16));
-  await assert.rejects(() => validateSnapshot(malformed), /digest mismatch/);
-  await assert.rejects(() => publishSnapshot(catalog, config, malformed, 'integration'), /digest mismatch/);
+  await assert.rejects(() => validateSnapshot(malformed), /artifact size mismatch|digest mismatch/);
+  await assert.rejects(() => publishSnapshot(catalog, config, malformed, 'integration'), /artifact size mismatch|digest mismatch/);
   assert.equal(catalog.status().channels[0].snapshot_id, currentBefore);
   await validateSnapshot(path.join(config.paths.published, 'integration'));
+});
+
+test('snapshot validation rejects a junction instead of following it as immutable authority', async (t) => {
+  const config = await workspace(t);
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const source = await registerInput(catalog, { fixtureId: 'bootstrap_v1' });
+  await ingestSource(catalog, source, config);
+  const snapshot = await buildSnapshot(catalog, config, 'integration');
+  const linked = path.join(config.workspace, 'linked-snapshot');
+  await symlink(snapshot.directory, linked, process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(validateSnapshot(linked), /Snapshot root is not a regular directory/u);
+  const manifest = JSON.parse(await readFile(path.join(snapshot.directory, 'snapshot.manifest.json'), 'utf8'));
+  const packageManifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.compiler.version, packageManifest.version);
+});
+
+test('snapshot validation rejects oversized rows through its bounded stream parser', async (t) => {
+  const config = await workspace(t);
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const source = await registerInput(catalog, { fixtureId: 'bootstrap_v1' });
+  await ingestSource(catalog, source, config);
+  const snapshot = await buildSnapshot(catalog, config, 'integration');
+  const malformed = path.join(config.workspace, 'oversized-audit-row');
+  await cp(snapshot.directory, malformed, { recursive: true });
+  const auditPath = path.join(malformed, 'evaluation.audit.jsonl');
+  const audit = await readFile(auditPath);
+  await writeFile(auditPath, Buffer.concat([
+    audit,
+    Buffer.from(`{"padding":"${'x'.repeat(4_200)}"}\n`, 'utf8'),
+  ]));
+  await refreshSnapshotIdentity(malformed);
+
+  await assert.rejects(
+    () => validateSnapshot(malformed),
+    /evaluation\.audit\.jsonl line exceeds 4096 bytes/,
+  );
 });
 
 test('current relative evaluation trims confirmed bad moves without pruning merely losing positions', async (t) => {

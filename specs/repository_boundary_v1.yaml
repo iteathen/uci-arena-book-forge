@@ -22,6 +22,9 @@ github_automation:
     - Exact local check commands and outcomes are recorded before merge.
     - Component release and provenance run only after explicit operator dispatch
       and are not automatically required pull-request status checks.
+    - The dispatched job publishes its verified archive, provider result, and
+      Sigstore bundle directly to one private immutable candidate prerelease;
+      Actions artifact storage is not candidate transport.
 
 contracts:
   component_ids: [book_forge.service, opening_book.standard]
@@ -37,6 +40,7 @@ rules:
   - Source imports never escape the repository root.
   - The UCI Arena checkout and Evidence Service checkout are unavailable to clean builds.
   - Vendored upstream packages are regular files and match every digest in the upstream lock.
+  - Windows provider payloads contain only application-local redistributable runtime libraries; OS-owned UCRT, API-set, and system-directory DLLs fail release construction.
   - Installed layout, workspace roots, schemas, startup identities, and component ids remain stable.
   - UCI Arena validates snapshots as a consumer but does not build Book Forge releases.
   - UCI Arena Installer is the only suite composition, assembly, and promotion
@@ -44,6 +48,9 @@ rules:
   - Manager discovers the API through arena-component.json and never opens the
     Book Forge catalog, scans the workspace, or infers artifact meaning from
     filenames.
+  - Opening-book artifacts declare read-only discovery and bounded knowledge
+    activation as separate manifest projections; component identity grants
+    neither authority.
   - Unknown API major versions, component substitution, malformed output
     identities, and paths escaping the declared snapshot root fail closed.
 
@@ -52,6 +59,7 @@ validation:
   - repository_import_boundary
   - clean_npm_install
   - source_tests
+  - windows_native_helpers_built_before_source_tests_without_native_skips
   - unrelated_working_directory_smoke
   - deterministic_component_candidate
   - keyless_signed_provenance

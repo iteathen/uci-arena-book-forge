@@ -10,6 +10,8 @@ import {
   installWindowsStartup,
   queryWindowsStartup,
   readStartupEvidence as readWindowsStartupEvidence,
+  startWindowsStartup,
+  stopWindowsStartup,
   uninstallWindowsStartup,
 } from './windows_startup.mjs';
 
@@ -62,10 +64,11 @@ WantedBy=default.target
 `;
 }
 
-async function queryLinuxStartup() {
+async function queryLinuxStartup(config) {
   const unitPath = linuxUserUnitPath();
   if (!existsSync(unitPath)) {
-    return { platform: 'linux', installed: false, unitName: linuxUnitName, unitPath };
+    return { platform: 'linux', installed: false, enabled: false, active: false,
+      matchesCurrentConfiguration: false, unitName: linuxUnitName, unitPath };
   }
   let enabled = false;
   let active = false;
@@ -79,7 +82,9 @@ async function queryLinuxStartup() {
       { timeout: 10_000 });
     active = true;
   } catch {}
-  return { platform: 'linux', installed: true, enabled, active, unitName: linuxUnitName, unitPath };
+  let matchesCurrentConfiguration = false;
+  try { matchesCurrentConfiguration = await readFile(unitPath, 'utf8') === buildLinuxUserUnit(config); } catch {}
+  return { platform: 'linux', installed: true, enabled, active, matchesCurrentConfiguration, unitName: linuxUnitName, unitPath };
 }
 
 async function installLinuxStartup(config) {
@@ -99,7 +104,21 @@ async function installLinuxStartup(config) {
   };
   await writeFile(path.join(config.workspace, 'startup-task.json'),
     `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
-  return queryLinuxStartup();
+  return queryLinuxStartup(config);
+}
+
+async function startLinuxStartup(config) {
+  const status = await queryLinuxStartup(config);
+  if (!status.installed) throw new Error(`Book Forge user unit is not registered: ${linuxUnitName}`);
+  await execFileAsync('systemctl', ['--user', 'start', linuxUnitName], { timeout: 20_000 });
+  return { ...(await queryLinuxStartup(config)), startRequested: true };
+}
+
+async function stopLinuxStartup(config) {
+  const status = await queryLinuxStartup(config);
+  if (!status.installed) throw new Error(`Book Forge user unit is not registered: ${linuxUnitName}`);
+  await execFileAsync('systemctl', ['--user', 'stop', linuxUnitName], { timeout: 20_000 });
+  return { ...(await queryLinuxStartup(config)), stopRequested: true };
 }
 
 async function uninstallLinuxStartup(config) {
@@ -123,6 +142,18 @@ export async function installStartup(config) {
   if (process.platform === 'win32') return installWindowsStartup(config);
   if (process.platform === 'linux') return installLinuxStartup(config);
   throw new Error(`Book Forge startup registration is unsupported on ${process.platform}`);
+}
+
+export async function startStartup(config) {
+  if (process.platform === 'win32') return startWindowsStartup(config);
+  if (process.platform === 'linux') return startLinuxStartup(config);
+  throw new Error(`Book Forge startup control is unsupported on ${process.platform}`);
+}
+
+export async function stopStartup(config) {
+  if (process.platform === 'win32') return stopWindowsStartup(config);
+  if (process.platform === 'linux') return stopLinuxStartup(config);
+  throw new Error(`Book Forge startup control is unsupported on ${process.platform}`);
 }
 
 export async function uninstallStartup(config) {
