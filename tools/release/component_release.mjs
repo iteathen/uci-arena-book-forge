@@ -524,6 +524,7 @@ export function buildComponent({
           || !Object.hasOwn(entrypoints, integrationEntrypoint)
           || JSON.stringify(installerIntegration.arguments) !== JSON.stringify(["--context"])
           || !/^[A-Za-z0-9._-]+$/u.test(installerIntegration.workspace_name ?? "")
+          || installerIntegration.workspace_placement !== "product_data"
           || typeof installerIntegration.configure_when_disabled !== "boolean"
           || invocation?.kind !== "dependency_runtime"
           || !dependencyIds.includes(invocation.runtime_component_id)

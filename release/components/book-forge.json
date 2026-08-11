@@ -45,6 +45,7 @@
     },
     "arguments": ["--context"],
     "workspace_name": "book-forge",
+    "workspace_placement": "product_data",
     "configure_when_disabled": false,
     "dependency_bindings": [
       {"name": "stockfish", "component_id": "stockfish.engine", "source": "entrypoint", "entrypoint": "stockfish", "required": true}

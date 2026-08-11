@@ -10,7 +10,7 @@ test('installer integration renders only provider-owned Book Forge configuration
   const result = renderInstallerConfiguration({
     schema: 'arena_provider_install_context_v1',
     schema_version: 1,
-    component: { id: 'book_forge.service', version: '0.4.1', root },
+    component: { id: 'book_forge.service', version: '0.4.2', root },
     workspace: path.join(root, 'state', 'book-forge'),
     enabled: true,
     bindings: { stockfish: path.join(root, 'components', 'stockfish.exe') },

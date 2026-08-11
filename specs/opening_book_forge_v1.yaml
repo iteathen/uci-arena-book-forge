@@ -183,7 +183,7 @@ publication:
         - zero_uci_compatibility_regressions
   atomicity: "Validate an immutable version directory, then atomically replace the channel directory."
   rollback: "Preserve the prior channel version and restore it on failed post-publication validation."
-  running_engine_rule: "A running engine retains its loaded snapshot; activation occurs on engine start or explicit reload."
+  running_engine_rule: "A running game retains its loaded snapshot. A persistent engine may activate the current stable channel only at engine start, explicit reload, or its engine-owned new-game boundary; publication never changes a game in progress."
   integration_rule: >
     The integration channel is the default operational Windows input for the
     UCI opening-book adapter. It is intentionally useful before strength
@@ -376,6 +376,7 @@ relocatable_install:
     - "Stockfish and native helper locations may be supplied by explicit component configuration."
     - "Stockfish resolution belongs to configuration composition: explicit configuration or UCI_ARENA_STOCKFISH wins, then the declared suite component path, then exact executable names in PATH; every selected executable still passes normal UCI interrogation and fingerprinting before authority is granted."
     - "The component artifact declares Book Forge discovery as an active-root resource; Installer and Manager never infer that role from its component id."
+    - "The component manifest declares product_data as its suite workspace placement. A conforming Installer resolves that placement beneath its mutable per-user or per-machine product data root, while standalone Book Forge retains its own platform default and explicit --workspace override."
     - "The component publishes a bounded installer-integration entrypoint that accepts only the versioned installation context, renders Book Forge-owned configuration, and never reads a credential file."
     - "Installer supplies dependency and saved-locator paths through declared bindings; Installer does not interpret Book Forge configuration fields or acquisition behavior."
     - "The component manifest declares Book Forge's exact startup action arguments, workspace/configuration flags, response envelope, and required configuration-match evidence; Installer executes that data without knowing Book Forge's CLI shape."
