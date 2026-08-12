@@ -28,9 +28,10 @@
     "summary": {"type": "object", "additionalProperties": false, "required": ["record_count"], "properties": {"record_count": {"type": "integer", "minimum": 1, "maximum": 2000000}}},
     "artifact": {
       "type": "object", "additionalProperties": false,
-      "required": ["root", "manifest_path", "manifest_sha256", "files"],
+      "required": ["root", "live_channel_root", "manifest_path", "manifest_sha256", "files"],
       "properties": {
         "root": {"type": "string", "minLength": 1},
+        "live_channel_root": {"type": ["string", "null"], "minLength": 1},
         "manifest_path": {"type": "string", "minLength": 1},
         "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "files": {
