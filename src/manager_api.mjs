@@ -65,6 +65,25 @@ async function safeSnapshotRoot(config, directory) {
   return resolved;
 }
 
+async function validatedLiveChannelRoot(config, current, expected) {
+  if (!current || current.snapshot_id !== expected.id) return null;
+  const declared = path.resolve(config.paths.published, expected.channel);
+  if (path.resolve(current.directory) !== declared) {
+    throw new Error(`Book Forge live channel path drifted for ${expected.id}`);
+  }
+  const directory = await realpath(declared);
+  if (directory !== await realpath(path.resolve(current.directory))) {
+    throw new Error(`Book Forge live channel path escaped for ${expected.id}`);
+  }
+  const validated = await validateSnapshot(directory);
+  if (validated.id !== expected.id
+      || validated.channel !== expected.channel
+      || validated.manifestSha256 !== expected.manifestSha256) {
+    throw new Error(`Book Forge live channel identity drifted for ${expected.id}`);
+  }
+  return directory;
+}
+
 async function outputRecord(catalog, config, row) {
   if (!/^(?:integration|qualified)-[0-9a-f]{20}$/u.test(row.id ?? '')) {
     throw new Error('Book Forge output identity is malformed');
@@ -80,6 +99,7 @@ async function outputRecord(catalog, config, row) {
   const manifestPath = path.join(directory, 'snapshot.manifest.json');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   const current = catalog.channel(row.channel);
+  const liveChannelRoot = await validatedLiveChannelRoot(config, current, validated);
   return {
     schema: OUTPUT_SCHEMA,
     output_id: row.id,
@@ -106,6 +126,7 @@ async function outputRecord(catalog, config, row) {
     },
     artifact: {
       root: directory,
+      live_channel_root: liveChannelRoot,
       manifest_path: manifestPath,
       manifest_sha256: validated.manifestSha256,
       files: Object.entries(manifest.artifacts)

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -246,6 +246,23 @@ test('Manager API opening-book output matches its closed packaged schema surface
   for (const field of ['state', 'authority', 'compatibility', 'summary', 'artifact']) {
     assert.deepEqual(Object.keys(output[field]).sort(), [...schema.properties[field].required].sort());
   }
+  assert.equal(output.artifact.live_channel_root, path.resolve(config.paths.published, 'integration'));
+});
+
+test('Manager API rejects a live channel that no longer matches its immutable output', async (t) => {
+  const { catalog, config } = await fixture(t);
+  const source = await registerInput(catalog, { fixtureId: 'bootstrap_v1' });
+  await ingestSource(catalog, source, config);
+  const snapshot = await buildSnapshot(catalog, config, 'integration');
+  await publishSnapshot(catalog, config, snapshot.directory, 'integration');
+  await writeFile(
+    path.join(config.paths.published, 'integration', 'strong_rare_v1.policy'),
+    'corrupt\n',
+  );
+  await assert.rejects(
+    listOutputsApi(catalog, config),
+    /Snapshot digest mismatch: strong_rare_v1\.policy/u,
+  );
 });
 
 test('installed CLI status distinguishes startup registration from live daemon activity', async (t) => {

@@ -311,6 +311,7 @@ manager_integration_api:
     - "Describe publishes component identity, API compatibility, operations, output kinds, and service-owned schemas."
     - "Configuration, status, and output schema identities resolve to closed JSON Schema documents packaged beneath contracts/."
     - "Output list and inspect return validated immutable snapshot identity, channel, qualification authority, exact manifest and artifact digests, current-channel state, and controlled absolute paths."
+    - "A current output also returns live_channel_root for the provider-owned stable published channel after independently validating that directory against the same immutable identity and digest. Historical output inspection returns null and never fabricates a mutable channel locator."
     - "A supplied cursor may suppress an unchanged output list but never changes output authority."
     - "The API validates each snapshot through the normal snapshot validator before exposing it and rejects catalog paths outside config.paths.snapshots."
     - "The API never returns raw catalog rows, SQL paths, source observations, credentials, credential paths, or unvalidated workspace files."
