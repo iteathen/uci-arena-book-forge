@@ -172,9 +172,16 @@ test("provider release proves independent target-scoped native reproducibility",
   assert.match(workflow, /\('cl\.exe', 'gh\.exe', 'git\.exe', 'msbuild\.exe'\)/u);
   assert.doesNotMatch(workflow, /actions\/(?:upload|download)-artifact/u);
   assert.match(workflow, /Expected exactly three candidate assets/u);
-  assert.match(workflow, /gh release create[\s\S]*?--target \$env:GITHUB_SHA/u);
+  assert.match(workflow, /gh release view \$tag[\s\S]*?targetCommitish[\s\S]*?isPrerelease[\s\S]*?assets/u);
+  assert.match(workflow, /targetCommitish -ne \$env:GITHUB_SHA/u);
+  assert.match(workflow, /@\(\$release\.assets\)\.Count -ne 0/u);
+  assert.match(workflow, /gh release upload \$tag @assetPaths/u);
+  assert.match(workflow, /@\(\$published\.assets\)\.Count -ne 3/u);
+  assert.match(workflow, /remote\[0\]\.size -ne \$asset\.Length/u);
+  assert.match(workflow, /remote\[0\]\.digest -ne \$expectedDigest/u);
+  assert.doesNotMatch(workflow, /gh release create/u);
   assert.ok(workflow.indexOf("provider_attestation.mjs verify-bundle")
-    < workflow.indexOf("gh release create"));
+    < workflow.indexOf("gh release upload"));
   assert.match(nativeCmake, /target_link_options\(uci_arena_background_guard PRIVATE \/Brepro\)/u);
   assert.match(nativeCmake, /target_link_options\(uci_arena_service_launcher PRIVATE \/Brepro\)/u);
 });

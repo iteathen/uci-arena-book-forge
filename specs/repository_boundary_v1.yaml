@@ -25,6 +25,10 @@ github_automation:
     - The dispatched job publishes its verified archive, provider result, and
       Sigstore bundle directly to one private immutable candidate prerelease;
       Actions artifact storage is not candidate transport.
+    - The suite release coordinator pre-provisions the exact empty candidate at
+      the dispatched source head. The component workflow validates that
+      identity and state, uploads exactly three assets, and verifies their
+      remote names, sizes, and SHA-256 digests before succeeding.
 
 contracts:
   component_ids: [book_forge.service, opening_book.standard]
