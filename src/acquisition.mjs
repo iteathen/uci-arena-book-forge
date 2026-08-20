@@ -1,14 +1,15 @@
 import { createHash } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { Chess } from 'chess.js';
 import { canonicalFen, encodePolyglotMove, keyBuffer, legalUciMove, polyglotKey, positionFingerprint } from './chess.mjs';
 import { parsePolicy, scoreSiblingCandidates } from './book_policy.mjs';
+import { packageRoot, suiteRoot } from './config.mjs';
+import { readExactCredential } from './exact_credential.mjs';
 import { RESOURCE_WORK_CLASSES } from './resource_governor.mjs';
 
 const providerId = 'lichess_opening_explorer';
 const overlapDomain = 'lichess_standard_rated';
 const startFen = canonicalFen(new Chess().fen());
-const maximumCredentialBytes = 4_096;
 const maximumResponseBytes = 1_048_576;
 
 function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
@@ -112,12 +113,17 @@ function retryAfterMilliseconds(response, minimum = 60_000) {
 }
 
 export class ExplorerAcquisition {
-  constructor(catalog, config, { fetchImpl = globalThis.fetch, delayImpl = delay } = {}) {
+  constructor(catalog, config, {
+    fetchImpl = globalThis.fetch,
+    delayImpl = delay,
+    credentialReader = readExactCredential,
+  } = {}) {
     if (typeof fetchImpl !== 'function') throw new Error('Book Forge acquisition requires a Fetch implementation');
     this.catalog = catalog;
     this.config = config;
     this.fetchImpl = fetchImpl;
     this.delay = delayImpl;
+    this.credentialReader = credentialReader;
     this.dataset = null;
     this.policy = null;
     this.lastRequestAt = 0;
@@ -139,13 +145,9 @@ export class ExplorerAcquisition {
 
   async credential() {
     try {
-      const details = await stat(this.config.acquisition.tokenFile);
-      if (!details.isFile() || details.size < 1 || details.size > maximumCredentialBytes) throw new Error('invalid');
-      const contents = await readFile(this.config.acquisition.tokenFile, 'utf8');
-      if (Buffer.byteLength(contents, 'utf8') > maximumCredentialBytes) throw new Error('invalid');
-      const token = contents.trim();
-      if (!token || /[\r\n]/.test(token)) throw new Error('invalid');
-      return token;
+      return await this.credentialReader(this.config.acquisition.tokenFile, {
+        excludedRoots: [packageRoot, suiteRoot, this.config.workspace],
+      });
     } catch {
       const error = new Error('Lichess acquisition credential is unavailable');
       error.code = 'BOOK_FORGE_AUTH';

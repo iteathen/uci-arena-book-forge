@@ -93,7 +93,12 @@ acquisition:
       rules:
         - "Read the token only inside the provider adapter and send it only as an authorization header."
         - "Never persist, log, print, hash, copy, or place the token or its contents on a command line."
-        - "The configured token path must resolve to a regular file containing one non-empty token and no control lines; the provider rejects files larger than 4096 bytes before reading them."
+        - "At every request, bound the absolute configured path, reject every linked or reparse ancestor and final object, and admit one stable regular-file descriptor rather than trusting prior configuration checks."
+        - "The admitted physical file must have one link and remain outside the package, suite, and workspace roots; lexical aliases, physical aliases, and a root or path substitution during admission fail closed."
+        - "Where the platform exposes no-follow and nonblocking open flags, use them. Pre-open path identity, descriptor identity and mutation fields before and after the bounded read, post-read path identity, and physical resolution must agree."
+        - "POSIX credential admission requires the invoking effective user to own the file, owner read permission, and no group or other permission bits. A platform access or descriptor-close failure rejects admission."
+        - "Read at most 4096 bytes plus one overflow byte through the descriptor. The exact content is one non-empty printable ASCII bearer token optionally terminated by one LF; all other whitespace, control bytes, extra lines, and oversized content are rejected without normalization."
+        - "Every failure returns the single bounded BOOK_FORGE_AUTH unavailable diagnostic without a path or token fragment, and token bytes are retained only by the request that immediately sends them to the fixed provider origin."
         - "Authentication failure opens a visible fail-closed circuit without terminating the daemon."
   frontier:
     seed: standard_start_position
