@@ -33,6 +33,14 @@ async function workspace(t) {
   return config;
 }
 
+async function fixtureCredential(t, contents = 'fixture-token\n') {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'book-forge-credential-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const filename = path.join(root, 'token');
+  await writeFile(filename, contents, { mode: 0o600 });
+  return filename;
+}
+
 function cleanCatalog(t, catalog, config) {
   t.after(async () => {
     catalog.close();
@@ -237,8 +245,7 @@ test('Stockfish composition uses explicit, suite, then bounded PATH discovery pr
 
 test('acquisition rejects oversized credential and response files without exposing credential contents', async (t) => {
   const config = await workspace(t);
-  config.acquisition.tokenFile = path.join(config.workspace, 'fixture-token.txt');
-  await writeFile(config.acquisition.tokenFile, 'x'.repeat(4_097), 'utf8');
+  config.acquisition.tokenFile = await fixtureCredential(t, 'x'.repeat(4_097));
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
   const acquisition = new ExplorerAcquisition(catalog, config);
@@ -260,9 +267,8 @@ test('acquisition rejects oversized credential and response files without exposi
 
 test('Explorer acquisition sips validated mover-relative positions and replaces cumulative observations', async (t) => {
   const config = await workspace(t);
-  config.acquisition.tokenFile = path.join(config.workspace, 'fixture-token.txt');
+  config.acquisition.tokenFile = await fixtureCredential(t);
   config.acquisition.dailyRequestBudget = 1;
-  await writeFile(config.acquisition.tokenFile, 'fixture-token\n');
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
   let captured;
@@ -473,11 +479,10 @@ test('daemon lock distinguishes an exact owner from a reused live pid', async (t
 
 test('Explorer rate limits and live resource revocation back off without partial observations', async (t) => {
   const config = await workspace(t);
-  config.acquisition.tokenFile = path.join(config.workspace, 'fixture-token.txt');
+  config.acquisition.tokenFile = await fixtureCredential(t);
   config.acquisition.resourcePollMs = 10;
   config.acquisition.requestTimeoutMs = 1_000;
   config.acquisition.dailyRequestBudget = 3;
-  await writeFile(config.acquisition.tokenFile, 'fixture-token\n');
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
   let permits = 0;
