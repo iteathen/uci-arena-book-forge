@@ -2,8 +2,9 @@ import { mkdirSync, existsSync, lstatSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { shardForKey } from './chess.mjs';
+import { processIdentityFromJson, processInstanceIsCurrent } from './process_identity.mjs';
 
-const CATALOG_SCHEMA = 4;
+const CATALOG_SCHEMA = 5;
 const SHARD_SCHEMA = 3;
 
 function transaction(database, action) {
@@ -121,6 +122,7 @@ export class Catalog {
       ) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS daemon_state (
         singleton INTEGER PRIMARY KEY CHECK(singleton=1), pid INTEGER, phase TEXT NOT NULL DEFAULT 'stopped',
+        process_identity TEXT NOT NULL DEFAULT '',
         started_at TEXT, heartbeat_at TEXT, cycle_started_at TEXT, cycle_completed_at TEXT,
         resource_mode TEXT NOT NULL DEFAULT '', last_report TEXT NOT NULL DEFAULT '{}',
         last_error TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL
@@ -148,6 +150,14 @@ export class Catalog {
       }
       this.database.exec("UPDATE sources SET overlap_domain='manual:' || sha256 WHERE overlap_domain=''");
       catalogVersion = 4;
+    }
+    if (catalogVersion === 4) {
+      const columns = new Set(this.database.prepare('PRAGMA table_info(daemon_state)').all()
+        .map((column) => column.name));
+      if (!columns.has('process_identity')) {
+        this.database.exec("ALTER TABLE daemon_state ADD COLUMN process_identity TEXT NOT NULL DEFAULT ''");
+      }
+      catalogVersion = 5;
     }
     if (!storedVersion) {
       this.database.prepare('INSERT INTO metadata(key,value) VALUES(?,?)').run('schema_version', String(CATALOG_SCHEMA));
@@ -665,9 +675,9 @@ export class Catalog {
     const value = { ...current, ...patch, singleton: 1, updated_at: new Date().toISOString() };
     if (typeof value.last_report !== 'string') value.last_report = JSON.stringify(value.last_report ?? {});
     if (value.last_report.length > 65_536) value.last_report = JSON.stringify({ truncated: true, bytes: value.last_report.length });
-    this.database.prepare(`UPDATE daemon_state SET pid=?,phase=?,started_at=?,heartbeat_at=?,cycle_started_at=?,
+    this.database.prepare(`UPDATE daemon_state SET pid=?,phase=?,process_identity=?,started_at=?,heartbeat_at=?,cycle_started_at=?,
       cycle_completed_at=?,resource_mode=?,last_report=?,last_error=?,updated_at=? WHERE singleton=1`)
-      .run(value.pid, value.phase, value.started_at, value.heartbeat_at, value.cycle_started_at,
+      .run(value.pid, value.phase, value.process_identity, value.started_at, value.heartbeat_at, value.cycle_started_at,
         value.cycle_completed_at, value.resource_mode, value.last_report,
         String(value.last_error ?? '').slice(0, 2048), value.updated_at);
   }
@@ -676,15 +686,9 @@ export class Catalog {
     const row = this.database.prepare('SELECT * FROM daemon_state WHERE singleton=1').get();
     const heartbeatMs = Date.parse(row.heartbeat_at ?? '');
     const stale = !Number.isFinite(heartbeatMs) || Date.now() - heartbeatMs > 300_000;
-    let processAlive = false;
-    if (Number.isSafeInteger(row.pid) && row.pid > 0) {
-      try {
-        process.kill(Number(row.pid), 0);
-        processAlive = true;
-      } catch (error) {
-        processAlive = error.code === 'EPERM';
-      }
-    }
+    const processAlive = processInstanceIsCurrent(
+      processIdentityFromJson(row.process_identity, Number(row.pid)),
+    );
     let lastReport = {};
     try { lastReport = JSON.parse(row.last_report || '{}'); } catch { lastReport = { invalid: true }; }
     return { pid: row.pid === null ? null : Number(row.pid), phase: row.phase, startedAt: row.started_at,

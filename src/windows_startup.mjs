@@ -167,6 +167,10 @@ export async function startWindowsStartup(config, {
   requireWindows();
   const registered = await queryImpl(config);
   if (!registered.installed) throw new Error(`Book Forge startup task is not registered: ${startupTaskName}`);
+  if (!registered.matchesCurrentConfiguration) {
+    throw new Error('Book Forge startup task does not match the current configuration');
+  }
+  if (registered.enabled === false) throw new Error('Book Forge startup task is disabled');
   try {
     await execFileImpl('schtasks.exe', ['/Run', '/TN', startupTaskName], {
       windowsHide: true, timeout: 10_000, maxBuffer: 1024 * 1024,

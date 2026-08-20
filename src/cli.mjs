@@ -15,6 +15,7 @@ import {
   listOutputsApi,
   publicStatus,
   statusApi,
+  startupRecoverApi,
   validateConfigApi,
 } from './manager_api.mjs';
 import { publishSnapshot } from './publisher.mjs';
@@ -22,6 +23,7 @@ import {
   installStartup,
   queryStartup,
   readStartupEvidence,
+  recoverStartup,
   startStartup,
   stopStartup,
   uninstallStartup,
@@ -54,13 +56,14 @@ export function apiOperationFromArguments(argv) {
     return `outputs_${argv[2]}`;
   }
   if (argv[1] === 'config' && argv[2] === 'validate') return 'config_validate';
+  if (argv[1] === 'startup' && argv[2] === 'recover') return 'startup_recover';
   return argv[1] ?? 'unknown';
 }
 
 async function main() {
   const { positional, options } = parseArguments(process.argv.slice(2));
   const [command, subcommand, argument, detail] = positional;
-  if (!command) throw new Error('Usage: book-forge <init|source <add|quarantine|retire|restore>|acquisition <run|status|retry-auth>|daemon|start|stop|pause|resume|status|snapshot build|qualification record|maintain|validate|publish|startup <install|status|uninstall>|api <describe|status|outputs <list|inspect>|config validate>>');
+  if (!command) throw new Error('Usage: book-forge <init|source <add|quarantine|retire|restore>|acquisition <run|status|retry-auth>|daemon|start|stop|pause|resume|status|snapshot build|qualification record|maintain|validate|publish|startup <install|status|recover|uninstall>|api <describe|status|outputs <list|inspect>|config validate|startup recover>>');
   const config = await loadConfig({ configFile: options.config, workspace: options.workspace });
   if (command === 'validate') {
     output({ ok: true, ...(await validateSnapshot(path.resolve(subcommand))) });
@@ -81,6 +84,8 @@ async function main() {
       output(await inspectOutputApi(catalog, config, options.id ?? detail));
     } else if (command === 'api' && subcommand === 'config' && argument === 'validate') {
       output(validateConfigApi(config));
+    } else if (command === 'api' && subcommand === 'startup' && argument === 'recover') {
+      output(await startupRecoverApi(config));
     } else if (command === 'init') {
       output({ ok: true, schema: 'uci_arena_book_forge_init_v1', workspace: config.workspace,
         status: await publicStatus(catalog, config) });
@@ -148,6 +153,8 @@ async function main() {
       output({ ok: true, startup: await installStartup(config) });
     } else if (command === 'startup' && subcommand === 'status') {
       output({ ok: true, startup: await queryStartup(config), evidence: await readStartupEvidence(config) });
+    } else if (command === 'startup' && subcommand === 'recover') {
+      output({ ok: true, startup: await recoverStartup(config) });
     } else if (command === 'startup' && subcommand === 'uninstall') {
       output({ ok: true, startup: await uninstallStartup(config) });
     } else if (command === 'publish') {
