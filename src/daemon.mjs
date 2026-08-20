@@ -1,4 +1,4 @@
-import { open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { acquireResourceLease } from '@uci-arena/background-service-runtime/lease';
@@ -9,6 +9,16 @@ import { runMaintenance } from './maintenance.mjs';
 import { publishSnapshot } from './publisher.mjs';
 import { RESOURCE_WORK_CLASSES, ResourceGovernor } from './resource_governor.mjs';
 import { analyzeObservations } from './stockfish.mjs';
+import {
+  currentProcessIdentity,
+  probeProcessInstance,
+  sameProcessInstance,
+  validProcessIdentity,
+} from './process_identity.mjs';
+
+const MAXIMUM_DAEMON_LOCK_BYTES = 16_384;
+const DAEMON_LOCK_SETTLE_MS = 10_000;
+const LEGACY_DAEMON_STALE_MS = 300_000;
 
 function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
 
@@ -50,40 +60,116 @@ async function withHeavyLease(factory, work) {
   }
 }
 
-async function acquireLock(config) {
+async function readLockPacket(filename) {
+  try {
+    const link = await lstat(filename);
+    if (!link.isFile() || link.isSymbolicLink() || link.size > MAXIMUM_DAEMON_LOCK_BYTES) {
+      return { value: null, raw: null, modifiedMs: link.mtimeMs };
+    }
+    const raw = await readFile(filename, 'utf8');
+    try {
+      return { value: JSON.parse(raw), raw, modifiedMs: link.mtimeMs };
+    } catch {
+      return { value: null, raw, modifiedMs: link.mtimeMs };
+    }
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    return { value: null, raw: null, modifiedMs: 0 };
+  }
+}
+
+async function legacyHeartbeatIsFresh(config, lock, now) {
+  try {
+    const heartbeat = await readLockPacket(config.daemonHeartbeatFile);
+    const heartbeatAt = Date.parse(String(heartbeat?.value?.heartbeatAt ?? ''));
+    return heartbeat?.value?.pid === lock?.pid
+      && Number.isFinite(heartbeatAt)
+      && now - heartbeatAt <= LEGACY_DAEMON_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
+async function retireLock(filename, expected) {
+  if (typeof expected?.raw !== 'string') return false;
+  const current = await readLockPacket(filename);
+  if (typeof current?.raw !== 'string' || current.raw !== expected.raw) return false;
+  const retired = `${filename}.retired-${process.pid}-${randomUUID()}`;
+  try {
+    await rename(filename, retired);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+  await rm(retired, { force: true });
+  return true;
+}
+
+export async function acquireDaemonLock(config, {
+  identity = currentProcessIdentity(),
+  probe = probeProcessInstance,
+  now = Date.now,
+} = {}) {
+  if (!validProcessIdentity(identity, process.pid)) {
+    throw new Error('Book Forge daemon process identity is invalid');
+  }
   const filename = path.join(config.paths.locks, 'daemon.lock');
   const nonce = randomUUID();
   let handle;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      handle = await open(filename, 'wx');
+      handle = await open(filename, 'wx', 0o600);
       break;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      let lock;
-      let age = 0;
-      try {
-        lock = JSON.parse(await readFile(filename, 'utf8'));
-        age = Date.now() - (await stat(filename)).mtimeMs;
-      } catch {}
-      let alive = age < 10_000;
-      if (!alive && Number.isSafeInteger(lock?.pid) && lock.pid > 0) {
-        try { process.kill(lock.pid, 0); alive = true; } catch (probeError) { alive = probeError.code === 'EPERM'; }
+      const packet = await readLockPacket(filename);
+      if (!packet) continue;
+      const age = Math.max(0, now() - packet.modifiedMs);
+      const lock = packet.value;
+      const recordedIdentity = validProcessIdentity(lock?.processIdentity, Number(lock?.pid))
+        ? lock.processIdentity
+        : null;
+      let reclaimable = false;
+      if (recordedIdentity) {
+        const observed = probe(recordedIdentity.pid);
+        if (observed?.state === 'unverifiable') {
+          throw new Error(`Another Book Forge daemon has unverifiable ownership of ${filename}`);
+        }
+        reclaimable = observed?.state === 'absent'
+          || (observed?.state === 'present'
+            && !sameProcessInstance(recordedIdentity, observed.identity));
+      } else if (age >= DAEMON_LOCK_SETTLE_MS) {
+        const observed = Number.isSafeInteger(lock?.pid) && lock.pid > 0
+          ? probe(lock.pid)
+          : { state: 'absent' };
+        reclaimable = observed?.state === 'absent'
+          || (age >= LEGACY_DAEMON_STALE_MS
+            && !await legacyHeartbeatIsFresh(config, lock, now()));
       }
-      if (alive || attempt > 0) throw new Error(`Another Book Forge daemon owns ${filename}`);
-      await rm(filename, { force: true });
+      if (!reclaimable || age < DAEMON_LOCK_SETTLE_MS || attempt > 1) {
+        throw new Error(`Another Book Forge daemon owns ${filename}`);
+      }
+      if (!await retireLock(filename, packet)) continue;
     }
   }
   if (!handle) throw new Error(`Could not acquire Book Forge daemon lock ${filename}`);
-  await handle.writeFile(JSON.stringify({ pid: process.pid, nonce, startedAt: new Date().toISOString() }));
-  return async () => {
+  const lock = {
+    schema: 'uci_arena_book_forge_daemon_lock_v2',
+    pid: process.pid,
+    nonce,
+    startedAt: new Date(now()).toISOString(),
+    processIdentity: identity,
+  };
+  const raw = `${JSON.stringify(lock)}\n`;
+  await handle.writeFile(raw);
+  await handle.sync();
+  return {
+    nonce,
+    processIdentity: identity,
+    release: async () => {
     await handle.close();
-    try {
-      const current = JSON.parse(await readFile(filename, 'utf8'));
-      if (current.nonce === nonce) await rm(filename, { force: true });
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
+      await retireLock(filename, { raw });
+    },
   };
 }
 
@@ -241,15 +327,27 @@ export async function runDaemon(catalog, config, {
       maximumCycleAttempts !== Number.POSITIVE_INFINITY) {
     throw new TypeError('maximumCycleAttempts must be a positive integer or Infinity');
   }
-  const releaseLock = await acquireLock(config);
+  const daemonLock = await acquireDaemonLock(config);
   const startedAt = new Date().toISOString();
   const heartbeat = async () => {
     const now = new Date().toISOString();
     let catalogError = null;
-    try { catalog.updateDaemonState({ pid: process.pid, started_at: startedAt, heartbeat_at: now }); }
+    try {
+      catalog.updateDaemonState({
+        pid: process.pid,
+        process_identity: JSON.stringify(daemonLock.processIdentity),
+        started_at: startedAt,
+        heartbeat_at: now,
+      });
+    }
     catch (error) { catalogError = error; }
     const temporary = `${config.daemonHeartbeatFile}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify({ pid: process.pid, heartbeatAt: now })}\n`, 'utf8');
+    await writeFile(temporary, `${JSON.stringify({
+      pid: process.pid,
+      nonce: daemonLock.nonce,
+      processIdentity: daemonLock.processIdentity,
+      heartbeatAt: now,
+    })}\n`, 'utf8');
     await rename(temporary, config.daemonHeartbeatFile);
     if (catalogError) throw catalogError;
   };
@@ -317,6 +415,6 @@ export async function runDaemon(catalog, config, {
     if (completedNormally) {
       catalog.updateDaemonState({ phase: 'stopped', heartbeat_at: new Date().toISOString() });
     }
-    await releaseLock();
+    await daemonLock.release();
   }
 }

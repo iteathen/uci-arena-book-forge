@@ -278,13 +278,16 @@ daemon_observability:
       Public JSON normalizes SQLite integer storage into typed booleans; storage
       representation must not leak across the CLI contract.
   rules:
+    - "The singleton lock and heartbeat bind one exact process instance using a provider-owned nonce plus an OS-derived process-start identity. A numeric pid alone is never owner authority."
+    - "A fresh exact owner is never displaced. A dead or pid-reused owner is reclaimed only after the persisted lock bytes are rechecked immediately before atomic retirement; an unverifiable current owner fails closed."
+    - "Legacy pid-only locks use the bounded heartbeat/staleness contract for one-way migration: a fresh matching heartbeat remains owned, while a stale lock is recoverable after the stale deadline even when that pid was reused."
     - "Status reports persisted phase, heartbeat, cycle timestamps, resource mode, bounded last report, and a redacted last error."
     - "A recoverable Stockfish-stage error remains visible in the bounded cycle report without changing the daemon phase to failed."
     - "A recoverable cycle-level error is visible as phase recovering with the consecutive failure count, bounded retry delay, next retry time, and redacted error in last_report while heartbeat updates continue."
     - "The Windows native guard terminates a stale daemon; the persistent native launcher then restarts it with bounded backoff, while Task Scheduler remains a second fallback if the launcher itself exits."
 
 cli:
-  commands: [init, source_add, source_quarantine, source_retire, source_restore, acquisition_run, acquisition_status, acquisition_retry_auth, daemon, start, stop, pause, resume, status, snapshot_build, qualification_record, maintain, validate, publish, startup_install, startup_status, startup_uninstall, api_describe, api_status, api_outputs_list, api_outputs_inspect, api_config_validate]
+  commands: [init, source_add, source_quarantine, source_retire, source_restore, acquisition_run, acquisition_status, acquisition_retry_auth, daemon, start, stop, pause, resume, status, snapshot_build, qualification_record, maintain, validate, publish, startup_install, startup_status, startup_recover, startup_uninstall, api_describe, api_status, api_outputs_list, api_outputs_inspect, api_config_validate, api_startup_recover]
   background_rule: "daemon --detach starts the same single-instance worker in a hidden detached Node process."
   lifecycle_rule: "start and stop control an existing platform startup registration without creating or deleting it; startup install and startup uninstall remain the only registration mutations."
   machine_output: json
@@ -301,11 +304,13 @@ manager_integration_api:
     - outputs_list
     - outputs_inspect
     - config_validate
+    - startup_recover
   output_schema: uci_arena_service_output_v1
   output_kind: opening_book.snapshot
   rules:
     - "The installed component manifest is the only discovery authority for the API entrypoint, version, transport, and invocation prefix."
     - "Manager invokes the service CLI and consumes one JSON response; Book Forge never calls or imports Manager."
+    - "startup_recover is a credential-free provider-owned operation that starts only the existing per-user registration, rejects an absent or configuration-mismatched registration, and never creates, replaces, enables, disables, or deletes registration."
     - "The canonical output-inspection invocation is api outputs inspect --id OUTPUT_ID. The output id is a named typed argument, never inferred from a flag name or an unrelated positional value."
     - "Every failed API invocation reports the declared operation identifier, including outputs_inspect, independently of option ordering."
     - "Describe publishes component identity, API compatibility, operations, output kinds, and service-owned schemas."
@@ -344,7 +349,7 @@ windows_startup:
     - "Multiple task instances are forbidden and the daemon lock remains the final single-instance authority."
     - "Installation is idempotent, starts the task immediately by default, writes non-secret registration evidence in the workspace, and never embeds credentials."
     - "Task Scheduler query XML may omit default-true task and trigger Enabled elements. Startup inspection treats omission as enabled, preserves any explicit false as disabled, and never infers enablement from a running daemon or retained evidence."
-    - "start runs the existing task and stop ends its current instance without deleting the registration; either command fails clearly when the task is not registered."
+    - "start and startup recover run the existing task and stop ends its current instance without deleting the registration; either start form fails clearly when the task is not registered or no longer matches the current provider configuration."
     - "startup uninstall ends the scheduled instance, deletes the task, and removes only Book Forge startup-registration evidence."
   validation:
     - task_xml_contract_test
@@ -353,6 +358,9 @@ windows_startup:
     - install_query_and_immediate_run_smoke
     - scheduled_process_topology_is_launcher_then_node_without_console
     - startup_status_reports_registered_absolute_action
+    - stale_lock_with_reused_live_pid_is_reclaimed
+    - exact_live_lock_owner_is_never_displaced
+    - manager_api_startup_recover_preserves_registration
 
 linux_startup:
   owner: book_forge_cli
@@ -363,7 +371,7 @@ linux_startup:
     - "The unit uses the installed package root as WorkingDirectory."
     - "ExecStart contains absolute private-Node, CLI, workspace, and optional config paths."
     - "Installation is idempotent and enables and starts the unit immediately."
-    - "start and stop control the registered user unit without enabling, disabling, creating, or deleting it."
+    - "start, startup recover, and stop control the registered user unit without enabling, disabling, creating, or deleting it; recovery rejects a configuration mismatch."
     - "No secret value is stored in the unit; only a configuration or token-file path may be referenced."
     - "The daemon lock remains final single-instance authority."
 

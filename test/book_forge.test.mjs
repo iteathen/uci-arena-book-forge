@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -12,13 +12,15 @@ import { Catalog } from '../src/catalog.mjs';
 import { canonicalFen, encodePolyglotMove, keyBuffer, polyglotKey, positionFingerprint } from '../src/chess.mjs';
 import { buildSnapshot, validateSnapshot } from '../src/compiler.mjs';
 import { discoverStockfish, loadConfig } from '../src/config.mjs';
-import { runCycle, runDaemon } from '../src/daemon.mjs';
+import { acquireDaemonLock, runCycle, runDaemon } from '../src/daemon.mjs';
 import { discoverInbox, ingestSource, registerInput } from '../src/ingest.mjs';
 import { runMaintenance } from '../src/maintenance.mjs';
 import { NativeResourceHelper } from '@uci-arena/background-service-runtime/native-resource-helper';
 import { publishSnapshot } from '../src/publisher.mjs';
 import { RESOURCE_WORK_CLASSES, ResourceGovernor } from '../src/resource_governor.mjs';
 import { analyzeObservations, StockfishWorker } from '../src/stockfish.mjs';
+import { currentProcessIdentity } from '../src/process_identity.mjs';
+import { recoverStartup } from '../src/platform_startup.mjs';
 import { buildTaskXml, installWindowsStartup, quoteWindowsArgument, startWindowsStartup, startupAction, startupTaskName, stopWindowsStartup } from '../src/windows_startup.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -144,7 +146,7 @@ test('Windows start and stop controls preserve the existing task registration', 
   const config = await workspace(t);
   t.after(() => rm(config.workspace, { recursive: true, force: true }));
   const calls = [];
-  const queryImpl = async () => ({ installed: true, taskName: startupTaskName, matchesCurrentConfiguration: true });
+  const queryImpl = async () => ({ installed: true, enabled: true, taskName: startupTaskName, matchesCurrentConfiguration: true });
   const execFileImpl = async (executable, argumentsList) => {
     calls.push({ executable, argumentsList });
     if (argumentsList[0] === '/End') throw Object.assign(new Error('not running'), { code: 1 });
@@ -185,7 +187,7 @@ test('catalog schema three migrates acquisition authority columns without losing
   const source = catalog.source(1);
   assert.equal(source.overlap_domain, `manual:${'f'.repeat(64)}`);
   assert.equal(source.contribution_mode, 'additive');
-  assert.equal(catalog.database.prepare("SELECT value FROM metadata WHERE key='schema_version'").get().value, '4');
+  assert.equal(catalog.database.prepare("SELECT value FROM metadata WHERE key='schema_version'").get().value, '5');
 });
 
 test('configuration normalizes prior schema prefixes and forbids redirecting the credential header', async (t) => {
@@ -377,7 +379,8 @@ test('Book Forge status exposes bounded daemon heartbeat and acquisition telemet
   const config = await workspace(t);
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
-  catalog.updateDaemonState({ pid: process.pid, phase: 'acquisition', heartbeat_at: new Date().toISOString(),
+  catalog.updateDaemonState({ pid: process.pid, process_identity: JSON.stringify(currentProcessIdentity()),
+    phase: 'acquisition', heartbeat_at: new Date().toISOString(),
     last_report: { payload: 'x'.repeat(100_000) } });
   let status = catalog.status();
   assert.equal(status.schema, 'uci_arena_book_forge_catalog_status_v1');
@@ -397,6 +400,75 @@ test('Book Forge status exposes bounded daemon heartbeat and acquisition telemet
     variant: 'standard', speeds: ['classical', 'rapid'], ratings: [2000, 2200, 2500],
     moves: 50, topGames: 0, recentGames: 0, history: false,
   });
+});
+
+test('startup recovery starts only an existing current registration', async () => {
+  const config = { workspace: 'fixture' };
+  let starts = 0;
+  const recovered = await recoverStartup(config, {
+    queryImpl: async () => ({
+      installed: true,
+      enabled: true,
+      matchesCurrentConfiguration: true,
+    }),
+    startImpl: async () => ({ installed: true, active: true, starts: ++starts }),
+  });
+  assert.equal(starts, 1);
+  assert.equal(recovered.recoveryRequested, true);
+  assert.equal(recovered.registrationMutated, false);
+  await assert.rejects(recoverStartup(config, {
+    queryImpl: async () => ({ installed: true, matchesCurrentConfiguration: false }),
+    startImpl: async () => { starts += 1; },
+  }), /does not match/);
+  assert.equal(starts, 1);
+});
+
+test('daemon lock distinguishes an exact owner from a reused live pid', async (t) => {
+  const config = await workspace(t);
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const filename = path.join(config.paths.locks, 'daemon.lock');
+  const current = currentProcessIdentity();
+  const replaced = {
+    ...current,
+    start_token: current.start_token === '1' ? '2' : '1',
+  };
+  const stale = new Date(Date.now() - 310_000);
+  await writeFile(filename, `${JSON.stringify({
+    schema: 'uci_arena_book_forge_daemon_lock_v2',
+    pid: process.pid,
+    nonce: 'replaced-owner',
+    processIdentity: replaced,
+  })}\n`);
+  await utimes(filename, stale, stale);
+  const acquired = await acquireDaemonLock(config, {
+    identity: current,
+    probe: () => ({ state: 'present', identity: current }),
+  });
+  await acquired.release();
+
+  await writeFile(filename, `${JSON.stringify({
+    schema: 'uci_arena_book_forge_daemon_lock_v2',
+    pid: process.pid,
+    nonce: 'exact-owner',
+    processIdentity: current,
+  })}\n`);
+  await utimes(filename, stale, stale);
+  await assert.rejects(
+    acquireDaemonLock(config, {
+      identity: current,
+      probe: () => ({ state: 'present', identity: current }),
+    }),
+    /Another Book Forge daemon owns/,
+  );
+
+  await writeFile(filename, `${JSON.stringify({ pid: process.pid })}\n`);
+  await utimes(filename, stale, stale);
+  const migrated = await acquireDaemonLock(config, {
+    identity: current,
+    probe: () => ({ state: 'present', identity: current }),
+  });
+  await migrated.release();
 });
 
 test('Explorer rate limits and live resource revocation back off without partial observations', async (t) => {

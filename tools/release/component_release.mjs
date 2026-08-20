@@ -221,7 +221,15 @@ function validateServiceControls(contract, definition) {
   if (JSON.stringify(contract.controls ?? null) !== JSON.stringify(definition.controls ?? null)) {
     throw new Error('service controls do not match the provider definition');
   }
-  const expectedControls = ['pause', 'resume', 'start', 'startup_install', 'startup_uninstall', 'stop'];
+  const expectedControls = [
+    'pause',
+    'resume',
+    'start',
+    'startup_install',
+    'startup_recover',
+    'startup_uninstall',
+    'stop',
+  ];
   if (!contract.controls || Object.keys(contract.controls).sort().join(',') !== expectedControls.join(',')) {
     throw new Error('service lifecycle controls are incomplete');
   }

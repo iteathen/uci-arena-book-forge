@@ -4,7 +4,7 @@ import { realpath, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { validateSnapshot } from './compiler.mjs';
-import { queryStartup } from './platform_startup.mjs';
+import { queryStartup, recoverStartup } from './platform_startup.mjs';
 
 const API_SCHEMA = 'uci_arena_manager_service_api_v1';
 const API_VERSION = '1.0';
@@ -20,6 +20,7 @@ const OPERATIONS = Object.freeze([
   'outputs_list',
   'outputs_inspect',
   'config_validate',
+  'startup_recover',
 ]);
 
 function envelope(operation, payload) {
@@ -257,5 +258,14 @@ export function validateConfigApi(config) {
     valid: true,
     configuration_schema: 'uci_arena_book_forge_config_v1',
     workspace: config.workspace,
+  });
+}
+
+export async function startupRecoverApi(config, recoverImpl = recoverStartup) {
+  const startup = await recoverImpl(config);
+  return envelope('startup_recover', {
+    startup,
+    recovery_requested: startup.recoveryRequested === true,
+    registration_mutated: startup.registrationMutated === true,
   });
 }
