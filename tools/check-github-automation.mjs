@@ -35,10 +35,17 @@ const workflowNames = (await readdir(workflowsRoot))
   .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
   .sort();
 for (const name of workflowNames) {
-  const triggers = workflowTriggers(
-    await readFile(path.join(workflowsRoot, name), "utf8"),
-    name,
-  );
+  const source = await readFile(path.join(workflowsRoot, name), "utf8");
+  const triggers = workflowTriggers(source, name);
+  if (name === "ci.yml") {
+    if (!triggers.includes("pull_request") || triggers.some(trigger => !["pull_request", "push", "workflow_dispatch"].includes(trigger))) {
+      failures.push(`${name}: only pull request, branch push and manual CI are allowed`);
+    }
+    if (!/^permissions:\s*\n  contents: read\s*$/m.test(source) || /:\s*write\b|secrets\.|self-hosted|^\s*environment:/m.test(source)) {
+      failures.push(`${name}: CI must be read-only, secret-free and GitHub-hosted`);
+    }
+    continue;
+  }
   const forbidden = triggers.filter((trigger) => forbiddenTriggers.has(trigger));
   if (forbidden.length > 0) {
     failures.push(`${name}: forbidden automatic trigger(s): ${forbidden.join(", ")}`);
@@ -52,5 +59,5 @@ if (failures.length > 0) {
   process.exit(1);
 }
 process.stdout.write(
-  `github-automation: ${workflowNames.length} manual workflow(s), automatic CI disabled\n`,
+  `github-automation: ${workflowNames.length} workflow(s), read-only CI and manual releases\n`,
 );
