@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Catalog } from './catalog.mjs';
 import { loadConfig } from './config.mjs';
+import { configureProcessIdentity } from './process_identity.mjs';
 import { buildSnapshot, validateSnapshot } from './compiler.mjs';
 import { runDaemon } from './daemon.mjs';
 import { registerInput, sha256File } from './ingest.mjs';
@@ -65,6 +66,9 @@ async function main() {
   const [command, subcommand, argument, detail] = positional;
   if (!command) throw new Error('Usage: book-forge <init|source <add|quarantine|retire|restore>|acquisition <run|status|retry-auth>|daemon|start|stop|pause|resume|status|snapshot build|qualification record|maintain|validate|publish|startup <install|status|recover|uninstall>|api <describe|status|outputs <list|inspect>|config validate|startup recover>>');
   const config = await loadConfig({ configFile: options.config, workspace: options.workspace });
+  const pureOperation = command === 'validate' || (command === 'api' &&
+    (subcommand === 'describe' || (subcommand === 'config' && argument === 'validate')));
+  if (!pureOperation) await configureProcessIdentity(config);
   if (command === 'validate') {
     output({ ok: true, ...(await validateSnapshot(path.resolve(subcommand))) });
     return;

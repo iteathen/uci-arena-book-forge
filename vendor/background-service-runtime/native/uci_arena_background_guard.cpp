@@ -1,7 +1,9 @@
 #include <windows.h>
 #include <powrprof.h>
+#include "process_instance_query.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -76,8 +78,24 @@ int probe() {
         << ",\"input_idle_ms\":" << input_idle_ms
         << ",\"cooling_mode\":" << cooling_mode
         << ",\"processor_limit_percent\":" << processor_limit_percent
+        << ",\"capabilities\":[\"process_instance_query_v1\"]"
         << "}\n";
     return 0;
+}
+
+int query_process_instance(DWORD process_id) {
+    using namespace uci_arena::background_service_runtime;
+    const auto observation = uci_arena::background_service_runtime::query_process_instance(process_id);
+    std::cout << "{\"schema\":\"uci_arena_process_instance_query_v1\",\"state\":";
+    if (observation.state == ProcessInstanceState::present) {
+        std::cout << "\"present\",\"identity\":{\"schema\":\"uci_arena_process_instance_identity_v1\""
+            << ",\"platform\":\"win32\",\"pid\":" << process_id
+            << ",\"start_token\":\"" << observation.creation_utc_ticks << "\""
+            << ",\"executable_path\":" << json_string(observation.executable_path)
+            << ",\"boot_id\":\"\"}";
+    } else std::cout << (observation.state == ProcessInstanceState::absent ? "\"absent\"" : "\"unverifiable\"");
+    std::cout << "}\n";
+    return std::cout.good() ? 0 : 2;
 }
 
 struct CourtesyResult {
@@ -276,6 +294,13 @@ int supervise(DWORD process_id, const std::string& heartbeat_file, std::uint64_t
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--probe") return probe();
+    if (argc == 3 && std::string_view(argv[1]) == "--query-process-instance") {
+        const std::string_view input(argv[2]);
+        DWORD process_id = 0;
+        const auto parsed = std::from_chars(input.data(), input.data() + input.size(), process_id);
+        if (parsed.ec != std::errc{} || parsed.ptr != input.data() + input.size() || process_id == 0) return 2;
+        return query_process_instance(process_id);
+    }
     if (argc == 5 && std::string_view(argv[1]) == "--apply-process-profile" &&
         std::string_view(argv[3]) == "--efficiency-cores") {
         try {
@@ -297,7 +322,7 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    std::cerr << "Usage: uci_arena_background_guard --probe | --apply-process-profile <pid> --efficiency-cores <0..2> | "
+    std::cerr << "Usage: uci_arena_background_guard --probe | --query-process-instance <pid> | --apply-process-profile <pid> --efficiency-cores <0..2> | "
         "--supervise <pid> --heartbeat <path> --stale-seconds <seconds>\n";
     return 2;
 }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,15 +20,28 @@ import { NativeResourceHelper } from '@uci-arena/background-service-runtime/nati
 import { publishSnapshot } from '../src/publisher.mjs';
 import { RESOURCE_WORK_CLASSES, ResourceGovernor } from '../src/resource_governor.mjs';
 import { analyzeObservations, StockfishWorker } from '../src/stockfish.mjs';
-import { currentProcessIdentity } from '../src/process_identity.mjs';
+import { configureProcessIdentity, currentProcessIdentity } from '../src/process_identity.mjs';
 import { recoverStartup } from '../src/platform_startup.mjs';
 import { buildTaskXml, installWindowsStartup, quoteWindowsArgument, startWindowsStartup, startupAction, startupTaskName, stopWindowsStartup } from '../src/windows_startup.mjs';
 
 const execFileAsync = promisify(execFile);
+// Every implicit lease operation in this test process and its CLI children is
+// confined to a fresh fixture root, never the live suite's default lease store.
+const fixtureLeaseRoot = await mkdtemp(path.join(os.tmpdir(), 'book-forge-test-leases-'));
+process.env.UCI_ARENA_RESOURCE_LEASE_ROOT = fixtureLeaseRoot;
+test.after(() => rm(fixtureLeaseRoot, { recursive: true, force: true }));
 
 async function workspace(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'book-forge-test-'));
   const config = await loadConfig({ workspace: root });
+  if (process.env.UCI_ARENA_BOOK_NATIVE_TEST_ROOT) {
+    const nativeRoot = path.resolve(process.env.UCI_ARENA_BOOK_NATIVE_TEST_ROOT);
+    config.nativeHelper = path.join(nativeRoot, 'bin', 'uci_arena_background_guard.exe');
+    config.nativeLauncher = path.join(nativeRoot, 'bin', 'uci_arena_service_launcher.exe');
+    config.nativeHelperAvailable = process.platform === 'win32' && existsSync(config.nativeHelper);
+    config.nativeLauncherAvailable = process.platform === 'win32' && existsSync(config.nativeLauncher);
+  }
+  await configureProcessIdentity(config);
   config.resources.minimumFreeWorkspaceGb = 0;
   config.resources.priorityProcessNames = [];
   return config;
@@ -535,7 +549,7 @@ test('daemon lock distinguishes an exact owner from a reused live pid', async (t
   const current = currentProcessIdentity();
   const replaced = {
     ...current,
-    start_token: current.start_token === '1' ? '2' : '1',
+    start_token: (BigInt(current.start_token) + 1n).toString(),
   };
   const stale = new Date(Date.now() - 310_000);
   await writeFile(filename, `${JSON.stringify({
@@ -631,10 +645,9 @@ test('one-shot daemon persists a heartbeat and a single bounded cycle report', a
   config.acquisition.enabled = false;
   config.channels.integration = false;
   config.channels.qualified = false;
-  config.nativeHelperAvailable = false;
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
-  const report = await runDaemon(catalog, config, { once: true });
+  const report = await runDaemon(catalog, config, { once: true, governorFactory: mockedResourceGovernor });
   const state = catalog.daemonState();
   assert.equal(report.acquisition.enabled, false);
   assert.equal(state.phase, 'stopped');
@@ -642,9 +655,59 @@ test('one-shot daemon persists a heartbeat and a single bounded cycle report', a
   assert.equal(state.lastReport.acquisition.enabled, false);
   const heartbeat = JSON.parse(await readFile(config.daemonHeartbeatFile, 'utf8'));
   assert.equal(heartbeat.pid, process.pid);
-  const repeated = await runDaemon(catalog, config, { once: true });
+  const repeated = await runDaemon(catalog, config, { once: true, governorFactory: mockedResourceGovernor });
   assert.equal(repeated.acquisition.enabled, false);
   assert.equal(catalog.daemonState().phase, 'stopped');
+});
+
+test('daemon governor substitution retains resource-policy hard stops and acquisition-only isolation', async (t) => {
+  const config = await workspace(t);
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const classes = [];
+  let factoryCalls = 0;
+  const report = await runDaemon(catalog, config, { once: true, acquisitionOnly: true,
+    governorFactory: (suppliedConfig, suppliedCatalog) => {
+      factoryCalls += 1;
+      assert.equal(suppliedConfig, config);
+      assert.equal(suppliedCatalog, catalog);
+      const governor = mockedResourceGovernor(suppliedConfig, suppliedCatalog, { availableMemoryGb: 0 });
+      const permit = governor.permit.bind(governor);
+      governor.permit = async (workClass) => { classes.push(workClass); return permit(workClass); };
+      return governor;
+    },
+  });
+  assert.equal(factoryCalls, 1);
+  assert.deepEqual(classes, [RESOURCE_WORK_CLASSES.ACQUISITION]);
+  assert.equal(report.resource.hardStop, true);
+  assert.match(report.acquisition.stopped, /memory/);
+  assert.equal(report.acquisition.requests, 0);
+  assert.deepEqual(report.discovered, []);
+  assert.equal(report.analysis, null);
+});
+
+test('default CLI governor rejects acquisition under real disk pressure and pure APIs need no helper', async (t) => {
+  const config = await workspace(t);
+  t.after(() => rm(config.workspace, { recursive: true, force: true }));
+  const configFile = path.join(config.workspace, 'owned-cli-config.json');
+  await mkdir(config.workspace, { recursive: true });
+  const fixtureConfig = { schema: config.schema, workspace: config.workspace,
+    nativeHelper: config.nativeHelper, nativeLauncher: config.nativeLauncher,
+    resources: { minimumFreeWorkspaceGb: 1000000, priorityProcessNames: [] } };
+  await writeFile(configFile, JSON.stringify(fixtureConfig));
+  const cli = path.resolve('src/cli.mjs');
+  const { stdout } = await execFileAsync(process.execPath, [cli, 'acquisition', 'run', '--config', configFile],
+    { windowsHide: true, timeout: 10000 });
+  const result = JSON.parse(stdout);
+  assert.equal(result.acquisition.requests, 0);
+  assert.match(result.acquisition.stopped, /^workspace free space /);
+  fixtureConfig.nativeHelper = path.join(config.workspace, 'unavailable-guard.exe');
+  await writeFile(configFile, JSON.stringify(fixtureConfig));
+  for (const args of [['api', 'describe'], ['api', 'config', 'validate']]) {
+    const pure = await execFileAsync(process.execPath, [cli, ...args, '--config', configFile],
+      { windowsHide: true, timeout: 10000 });
+    assert.equal(JSON.parse(pure.stdout).ok, true);
+  }
 });
 
 test('continuous daemon retries a failed cycle in-process with bounded exponential backoff', async (t) => {
@@ -652,7 +715,6 @@ test('continuous daemon retries a failed cycle in-process with bounded exponenti
   config.acquisition.enabled = false;
   config.channels.integration = false;
   config.channels.qualified = false;
-  config.nativeHelperAvailable = false;
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
   let calls = 0;
@@ -660,6 +722,7 @@ test('continuous daemon retries a failed cycle in-process with bounded exponenti
   let recoveringState = null;
   const recoveredReport = { recovered: true };
   const report = await runDaemon(catalog, config, {
+    governorFactory: mockedResourceGovernor,
     maximumCycleAttempts: 2,
     delayImpl: async (milliseconds) => {
       delays.push(milliseconds);
@@ -686,10 +749,10 @@ test('continuous daemon retries a failed cycle in-process with bounded exponenti
 
 test('one-shot daemon remains fail-fast and leaves a visible failed state', async (t) => {
   const config = await workspace(t);
-  config.nativeHelperAvailable = false;
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
   await assert.rejects(runDaemon(catalog, config, {
+    governorFactory: mockedResourceGovernor,
     once: true,
     cycleRunner: async () => { throw new Error('one-shot failure'); },
   }), /one-shot failure/);
@@ -733,10 +796,9 @@ test('a transient Stockfish failure is isolated to analysis and the cycle comple
 test('acquisition-only execution stays isolated from ingestion, analysis, and publication', async (t) => {
   const config = await workspace(t);
   config.acquisition.enabled = false;
-  config.nativeHelperAvailable = false;
   const catalog = new Catalog(config);
   cleanCatalog(t, catalog, config);
-  const report = await runDaemon(catalog, config, { once: true, acquisitionOnly: true });
+  const report = await runDaemon(catalog, config, { once: true, acquisitionOnly: true, governorFactory: mockedResourceGovernor });
   assert.equal(report.acquisition.enabled, false);
   assert.deepEqual(report.discovered, []);
   assert.deepEqual(report.ingested, []);
@@ -1408,6 +1470,7 @@ test('optional Windows guard exposes battery, input-idle, and processor-limit te
   if (!config.nativeHelperAvailable) return t.skip('native resource guard is not built');
   const probe = await new NativeResourceHelper(config).probe();
   assert.equal(probe.schema, 'uci_arena_background_service_native_probe_v1');
+  assert.ok(probe.capabilities.includes('process_instance_query_v1'));
   assert.equal(typeof probe.on_battery, 'boolean');
   assert.ok(Number.isInteger(probe.input_idle_ms));
   assert.ok(probe.processor_limit_percent >= 0 && probe.processor_limit_percent <= 100);
