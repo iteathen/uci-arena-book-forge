@@ -87,6 +87,19 @@ acquisition:
       top_games: 0
       recent_games: 0
       maximum_ply: 30
+    move_transport:
+      source_castling: king_to_corresponding_rook
+      canonical_castling: standard_king_destination
+      upstream_evidence:
+        repository: lichess-org/lila-openingexplorer
+        commit: e8aae1f903931aebc9bf821982b6c098b312c1e7
+        input: src/indexer/lichess.rs
+        output: src/main.rs
+      rules:
+        - "The intrinsic provider adapter translates king-to-rook notation only when it identifies an actual legal standard-chess castle at the queried FEN."
+        - "Canonical UCI legality remains unchanged; missing rights, missing rooks, check, attacked transit/destination squares, blocked paths, wrong side, and unsupported Chess960 positions grant no castling authority."
+        - "Previously admitted standard king-destination UCI remains accepted. Deduplication uses canonical moves, so equivalent source and canonical castling tokens reject the complete response rather than double-counting."
+        - "Only a complete validated response reaches atomic observation replacement and child-frontier enqueue; both consume canonical UCI moves."
     credential:
       source: configurable_token_file
       default_path: secrets/lichess_bot_token.txt

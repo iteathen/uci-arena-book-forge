@@ -70,6 +70,21 @@ function normalizedQuery(config) {
   };
 }
 
+function canonicalProviderMove(fen, uci) {
+  // This provider encodes castling as king-to-rook, including standard games.
+  // Match an actual legal standard castle before translating transport notation.
+  const destination = { e1h1: 'g1', e1a1: 'c1', e8h8: 'g8', e8a8: 'c8' }[uci];
+  if (typeof destination !== 'string') return uci;
+  const chess = new Chess(canonicalFen(fen));
+  const from = uci.slice(0, 2);
+  const king = chess.get(from);
+  const rook = chess.get(uci.slice(2, 4));
+  if (king?.type !== 'k' || rook?.type !== 'r' || rook.color !== king.color) return uci;
+  const castle = chess.moves({ verbose: true }).some((move) => move.from === from && move.to === destination &&
+    (move.flags.includes('k') || move.flags.includes('q')));
+  return castle ? `${from}${destination}` : uci;
+}
+
 function responseRecords(fen, payload) {
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.moves)) throw new Error('Explorer response is not a move aggregate object');
   if (payload.moves.length > 50) throw new Error('Explorer response exceeds the requested move bound');
@@ -80,16 +95,18 @@ function responseRecords(fen, payload) {
   const moverIsWhite = canonicalFen(fen).split(' ')[1] === 'w';
   const seen = new Set();
   const records = payload.moves.map((move, index) => {
-    if (!move || typeof move !== 'object' || typeof move.uci !== 'string' || seen.has(move.uci) || !legalUciMove(fen, move.uci)) {
+    if (!move || typeof move !== 'object' || typeof move.uci !== 'string') {
       throw new Error(`Explorer response has invalid move at index ${index}`);
     }
-    seen.add(move.uci);
+    const uci = canonicalProviderMove(fen, move.uci);
+    if (seen.has(uci) || !legalUciMove(fen, uci)) throw new Error(`Explorer response has invalid move at index ${index}`);
+    seen.add(uci);
     const white = safeCount(move.white, `move ${move.uci} white`);
     const draws = safeCount(move.draws, `move ${move.uci} draws`);
     const black = safeCount(move.black, `move ${move.uci} black`);
     const averageRating = safeCount(move.averageRating, `move ${move.uci} average rating`);
     return {
-      rawMove: encodePolyglotMove(move.uci), uciMove: move.uci, games: white + draws + black,
+      rawMove: encodePolyglotMove(uci), uciMove: uci, games: white + draws + black,
       wins: moverIsWhite ? white : black, draws, losses: moverIsWhite ? black : white, averageRating,
     };
   });
