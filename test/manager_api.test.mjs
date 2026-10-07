@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -234,6 +234,13 @@ test('installed CLI API works from an unrelated working directory', async (t) =>
 
 test('Manager API opening-book output matches its closed packaged schema surface', async (t) => {
   const { catalog, config } = await fixture(t);
+  if (process.platform === 'win32') {
+    // A spelling alias of the same directory must not become output authority.
+    const physical = await stat(config.paths.published);
+    config.paths.published = config.paths.published.toUpperCase();
+    const alias = await stat(config.paths.published);
+    assert.deepEqual([alias.dev, alias.ino], [physical.dev, physical.ino]);
+  }
   const source = await registerInput(catalog, { fixtureId: 'bootstrap_v1' });
   await ingestSource(catalog, source, config);
   const snapshot = await buildSnapshot(catalog, config, 'integration');
@@ -246,7 +253,7 @@ test('Manager API opening-book output matches its closed packaged schema surface
   for (const field of ['state', 'authority', 'compatibility', 'summary', 'artifact']) {
     assert.deepEqual(Object.keys(output[field]).sort(), [...schema.properties[field].required].sort());
   }
-  assert.equal(output.artifact.live_channel_root, path.resolve(config.paths.published, 'integration'));
+  assert.equal(output.artifact.live_channel_root, await realpath(path.resolve(config.paths.published, 'integration')));
 });
 
 test('Manager API rejects a live channel that no longer matches its immutable output', async (t) => {
