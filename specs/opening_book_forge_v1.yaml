@@ -273,7 +273,7 @@ resource_governor:
   pause_thresholds:
     available_memory_gb: 6
     free_workspace_gb: 75
-  windows_helper_scope: [job_objects, eco_qos, efficiency_cpu_sets, input_idle, io_priority]
+  windows_helper_scope: [job_objects, eco_qos, efficiency_cpu_sets, input_idle, io_priority, exact_process_instance_query]
   rules:
     - "Back off quickly and ramp slowly with hysteresis."
     - "uci_arena_engine.exe is the priority engine process; heavy Forge work yields while it is running."
@@ -297,12 +297,17 @@ daemon_observability:
       representation must not leak across the CLI contract.
   rules:
     - "The singleton lock and heartbeat bind one exact process instance using a provider-owned nonce plus an OS-derived process-start identity. A numeric pid alone is never owner authority."
+    - "Windows identity-dependent composition qualifies process_instance_query_v1 from the explicit selected NativeResourceHelper before using its public queryProcessInstanceSync operation. Pure describe, configuration validation, and artifact validation require no native connection; Linux retains its /proc adapter."
+    - "Windows process observations have no PowerShell, discovery, retry, or prewarming fallback. Their admitted PID, exact UTC DateTime.Ticks string, executable-path range, and maximum two-second query budget come from the pinned public native process-instance contract; a smaller caller budget is passed without expansion."
+    - "Persisted start identities are exact decimal strings, never rounded numeric tokens. Malformed current-format identity, malformed observed identity, unknown state, denied observation, and invalid PID remain unverifiable and never authorize singleton replacement."
+    - "The lock and heartbeat reader share one provider-owned byte cap derived from the public maximum-response bound, sufficient for the maximum Windows path and fixed record envelope. Bounded raw reads use fatal UTF-8 decoding; malformed bytes never become literal replacement characters or a legacy absence proof."
     - "A fresh exact owner is never displaced. A dead or pid-reused owner is reclaimed only after the persisted lock bytes are rechecked immediately before atomic retirement; an unverifiable current owner fails closed."
     - "Legacy pid-only locks use the bounded heartbeat/staleness contract for one-way migration: a fresh matching heartbeat remains owned, while a stale lock is recoverable after the stale deadline even when that pid was reused."
     - "Status reports persisted phase, heartbeat, cycle timestamps, resource mode, bounded last report, and a redacted last error."
     - "A recoverable Stockfish-stage error remains visible in the bounded cycle report without changing the daemon phase to failed."
     - "A recoverable cycle-level error is visible as phase recovering with the consecutive failure count, bounded retry delay, next retry time, and redacted error in last_report while heartbeat updates continue."
     - "The Windows native guard terminates a stale daemon; the persistent native launcher then restarts it with bounded backoff, while Task Scheduler remains a second fallback if the launcher itself exits."
+    - "The CLI foreground daemon entrypoint owns the Node process lifetime, including one-shot acquisition; its native supervisor watches that process, not one reusable cycle call. Cycle/lifecycle tests in a continuing test process substitute the ResourceGovernor role through governorFactory while retaining actual configured process-identity queries; default production composition remains ResourceGovernor and its typed permit authority."
 
 cli:
   commands: [init, source_add, source_quarantine, source_retire, source_restore, acquisition_run, acquisition_status, acquisition_retry_auth, daemon, start, stop, pause, resume, status, snapshot_build, qualification_record, maintain, validate, publish, startup_install, startup_status, startup_recover, startup_uninstall, api_describe, api_status, api_outputs_list, api_outputs_inspect, api_config_validate, api_startup_recover]

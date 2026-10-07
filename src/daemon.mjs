@@ -1,7 +1,9 @@
 import { lstat, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { TextDecoder } from 'node:util';
 import { acquireResourceLease } from '@uci-arena/background-service-runtime/lease';
+import processQueryContract from '@uci-arena/background-service-runtime/process-instance-query-contract' with { type: 'json' };
 import { ExplorerAcquisition } from './acquisition.mjs';
 import { buildSnapshot } from './compiler.mjs';
 import { discoverInbox, ingestSource } from './ingest.mjs';
@@ -11,12 +13,13 @@ import { RESOURCE_WORK_CLASSES, ResourceGovernor } from './resource_governor.mjs
 import { analyzeObservations } from './stockfish.mjs';
 import {
   currentProcessIdentity,
+  configureProcessIdentity,
+  MAXIMUM_PROCESS_IDENTITY_RECORD_BYTES,
   probeProcessInstance,
   sameProcessInstance,
   validProcessIdentity,
 } from './process_identity.mjs';
 
-const MAXIMUM_DAEMON_LOCK_BYTES = 16_384;
 const DAEMON_LOCK_SETTLE_MS = 10_000;
 const LEGACY_DAEMON_STALE_MS = 300_000;
 
@@ -63,10 +66,27 @@ async function withHeavyLease(factory, work) {
 async function readLockPacket(filename) {
   try {
     const link = await lstat(filename);
-    if (!link.isFile() || link.isSymbolicLink() || link.size > MAXIMUM_DAEMON_LOCK_BYTES) {
+    if (!link.isFile() || link.isSymbolicLink() || link.size > MAXIMUM_PROCESS_IDENTITY_RECORD_BYTES) {
       return { value: null, raw: null, modifiedMs: link.mtimeMs };
     }
-    const raw = await readFile(filename, 'utf8');
+    const handle = await open(filename, 'r');
+    let bytes;
+    try {
+      const descriptor = await handle.stat();
+      if (!descriptor.isFile() || descriptor.size > MAXIMUM_PROCESS_IDENTITY_RECORD_BYTES) return { value: null, raw: null, modifiedMs: link.mtimeMs };
+      const buffer = Buffer.alloc(MAXIMUM_PROCESS_IDENTITY_RECORD_BYTES + 1);
+      let offset = 0;
+      while (offset < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, null);
+        if (bytesRead === 0) break;
+        offset += bytesRead;
+      }
+      if (offset > MAXIMUM_PROCESS_IDENTITY_RECORD_BYTES) return { value: null, raw: null, modifiedMs: link.mtimeMs };
+      bytes = buffer.subarray(0, offset);
+    } finally {
+      await handle.close();
+    }
+    const raw = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
     try {
       return { value: JSON.parse(raw), raw, modifiedMs: link.mtimeMs };
     } catch {
@@ -81,12 +101,14 @@ async function readLockPacket(filename) {
 async function legacyHeartbeatIsFresh(config, lock, now) {
   try {
     const heartbeat = await readLockPacket(config.daemonHeartbeatFile);
+    if (heartbeat === null) return false;
+    if (!heartbeat.value) return null;
     const heartbeatAt = Date.parse(String(heartbeat?.value?.heartbeatAt ?? ''));
     return heartbeat?.value?.pid === lock?.pid
       && Number.isFinite(heartbeatAt)
       && now - heartbeatAt <= LEGACY_DAEMON_STALE_MS;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -126,13 +148,20 @@ export async function acquireDaemonLock(config, {
       if (!packet) continue;
       const age = Math.max(0, now() - packet.modifiedMs);
       const lock = packet.value;
-      const recordedIdentity = validProcessIdentity(lock?.processIdentity, Number(lock?.pid))
+      const currentFormat = lock?.schema === 'uci_arena_book_forge_daemon_lock_v2';
+      const legacyFormat = lock && (lock.schema === undefined || lock.schema === 'uci_arena_book_forge_daemon_lock_v1')
+        && !Object.hasOwn(lock, 'processIdentity') && Number.isSafeInteger(lock.pid)
+        && lock.pid >= processQueryContract.pid_minimum && lock.pid <= processQueryContract.pid_maximum;
+      const recordedIdentity = currentFormat && validProcessIdentity(lock?.processIdentity) && lock.pid === lock.processIdentity.pid
         ? lock.processIdentity
         : null;
+      if ((!currentFormat && !legacyFormat) || (currentFormat && !recordedIdentity)) {
+        throw new Error(`Book Forge daemon ownership is malformed or unverifiable at ${filename}`);
+      }
       let reclaimable = false;
       if (recordedIdentity) {
         const observed = probe(recordedIdentity.pid);
-        if (observed?.state === 'unverifiable') {
+        if (observed?.state !== 'absent' && !(observed?.state === 'present' && validProcessIdentity(observed.identity, recordedIdentity.pid))) {
           throw new Error(`Another Book Forge daemon has unverifiable ownership of ${filename}`);
         }
         reclaimable = observed?.state === 'absent'
@@ -141,10 +170,13 @@ export async function acquireDaemonLock(config, {
       } else if (age >= DAEMON_LOCK_SETTLE_MS) {
         const observed = Number.isSafeInteger(lock?.pid) && lock.pid > 0
           ? probe(lock.pid)
-          : { state: 'absent' };
+          : { state: 'unverifiable' };
+        if (observed?.state !== 'absent' && !(observed?.state === 'present' && validProcessIdentity(observed.identity, lock.pid))) {
+          throw new Error(`Another Book Forge daemon has unverifiable ownership of ${filename}`);
+        }
         reclaimable = observed?.state === 'absent'
           || (age >= LEGACY_DAEMON_STALE_MS
-            && !await legacyHeartbeatIsFresh(config, lock, now()));
+            && await legacyHeartbeatIsFresh(config, lock, now()) === false);
       }
       if (!reclaimable || age < DAEMON_LOCK_SETTLE_MS || attempt > 1) {
         throw new Error(`Another Book Forge daemon owns ${filename}`);
@@ -319,6 +351,7 @@ export async function runDaemon(catalog, config, {
   acquisitionMaxRequests = undefined,
   acquisitionOnly = false,
   cycleRunner = runCycle,
+  governorFactory = (configuration, storage) => new ResourceGovernor(configuration, storage),
   delayImpl = delay,
   maximumCycleAttempts = Number.POSITIVE_INFINITY,
 } = {}) {
@@ -327,6 +360,7 @@ export async function runDaemon(catalog, config, {
       maximumCycleAttempts !== Number.POSITIVE_INFINITY) {
     throw new TypeError('maximumCycleAttempts must be a positive integer or Infinity');
   }
+  await configureProcessIdentity(config);
   const daemonLock = await acquireDaemonLock(config);
   const startedAt = new Date().toISOString();
   const heartbeat = async () => {
@@ -357,7 +391,7 @@ export async function runDaemon(catalog, config, {
   let governor = null;
   let completedNormally = false;
   try {
-    governor = new ResourceGovernor(config, catalog);
+    governor = governorFactory(config, catalog);
     const acquisition = new ExplorerAcquisition(catalog, config);
     let lastReport = null;
     let attempts = 0;
