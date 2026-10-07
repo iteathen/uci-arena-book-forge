@@ -9,7 +9,7 @@ import test from 'node:test';
 import { promisify } from 'node:util';
 import { ExplorerAcquisition, acquisitionQuery, validateExplorerResponse } from '../src/acquisition.mjs';
 import { Catalog } from '../src/catalog.mjs';
-import { canonicalFen, encodePolyglotMove, keyBuffer, polyglotKey, positionFingerprint } from '../src/chess.mjs';
+import { canonicalFen, encodePolyglotMove, keyBuffer, legalUciMove, polyglotKey, positionFingerprint } from '../src/chess.mjs';
 import { buildSnapshot, validateSnapshot } from '../src/compiler.mjs';
 import { discoverStockfish, loadConfig } from '../src/config.mjs';
 import { acquireDaemonLock, runCycle, runDaemon } from '../src/daemon.mjs';
@@ -354,6 +354,104 @@ test('Explorer source authority prevents overlapping datasets from double counti
   assert.deepEqual(catalog.acquisitionEvidence().map((entry) => entry.contribution_mode).sort(), ['audit_only', 'authoritative']);
   assert.equal(catalog.acquisitionStatus().positions, 0);
   assert.equal(catalog.acquisitionStatus().frontierPositions, 1);
+});
+
+// Synthetic provider payloads, not recovered responses. The three opening FENs
+// below were retained by rejected frontier rows; their rejected UCI was not kept.
+function syntheticExplorerMoves(...moves) {
+  return { white: moves.length * 40, draws: 0, black: moves.length * 40,
+    moves: moves.map((uci) => ({ uci, averageRating: 2200, white: 40, draws: 0, black: 40 })) };
+}
+
+const rejectedExplorerFens = [
+  'r1bqk1nr/ppppbppp/2n1p3/8/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 1',
+  'r1bqkb1r/pp1ppppp/2n2n2/2p5/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 1',
+  'r1bqkbnr/pp1pppp1/2n5/1Bp4p/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 1',
+];
+for (const [index, fen] of rejectedExplorerFens.entries()) {
+  test(`Explorer castling transport normalizes synthetic UCI at retained rejected FEN ${index + 1}`, () => {
+    const [record] = validateExplorerResponse(fen, syntheticExplorerMoves('e1h1'));
+    assert.equal(record.uciMove, 'e1g1');
+    assert.equal(record.rawMove, encodePolyglotMove('e1g1'));
+    assert.equal(legalUciMove(fen, 'e1h1'), false);
+  });
+}
+
+for (const [side, providerMoves, canonicalMoves] of [
+  ['w', ['e1h1', 'e1a1'], ['e1g1', 'e1c1']],
+  ['b', ['e8h8', 'e8a8'], ['e8g8', 'e8c8']],
+]) {
+  test(`Explorer castling transport handles both legal ${side} castles and canonical duplicates`, () => {
+    const fen = `r3k2r/8/8/8/8/8/8/R3K2R ${side} KQkq - 0 1`;
+    const records = validateExplorerResponse(fen, syntheticExplorerMoves(...providerMoves));
+    assert.deepEqual(records.map((record) => record.uciMove), canonicalMoves);
+    assert.deepEqual(records.map((record) => record.rawMove), canonicalMoves.map(encodePolyglotMove));
+    assert.deepEqual(validateExplorerResponse(fen, syntheticExplorerMoves(...canonicalMoves)), records);
+    for (const [index, providerMove] of providerMoves.entries()) {
+      for (const pair of [[providerMove, canonicalMoves[index]], [canonicalMoves[index], providerMove], [providerMove, providerMove]]) {
+        assert.throws(() => validateExplorerResponse(fen, syntheticExplorerMoves(...pair)), /invalid move at index 1/);
+      }
+    }
+  });
+}
+
+test('Explorer castling transport rejects unavailable or attacked castles and noncastle corruption', () => {
+  const illegal = [
+    ['r3k2r/8/8/8/8/8/8/R3K2R w - - 0 1', 'e1h1'],
+    ['r3k2r/8/8/8/8/8/8/R3K2R b - - 0 1', 'e8a8'],
+    ['r3k2r/8/8/8/8/8/8/R3K3 w KQkq - 0 1', 'e1h1'],
+    ['r3k2r/8/8/8/8/8/8/R3K2R w Qkq - 0 1', 'e1h1'],
+    ['r3k2r/8/8/8/8/8/4r3/R3K2R w KQkq - 0 1', 'e1h1'],
+    ['r3kr1r/8/8/8/8/8/8/R3K2R w KQkq - 0 1', 'e1h1'],
+    ['r1rk3r/8/8/8/8/8/8/R3K2R w KQkq - 0 1', 'e1a1'],
+    ['r3k2r/8/8/8/8/8/8/R3KB1R w KQkq - 0 1', 'e1h1'],
+    ['r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1', 'e8h8'],
+    ['r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1', 'e1h1q'],
+    ['r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1', 'e1b1'],
+    ['r3k2r/8/8/8/8/8/8/R2K3R w KQkq - 0 1', 'd1h1'],
+    ['r3k2r/8/8/8/8/8/8/R3K2R w HAha - 0 1', 'e1h1'],
+  ];
+  for (const [fen, uci] of illegal) assert.throws(() => validateExplorerResponse(fen, syntheticExplorerMoves(uci)), /invalid move|Invalid FEN/);
+  const fen = '4k3/8/8/8/8/8/8/4R2K w - - 0 1';
+  const [rook] = validateExplorerResponse(fen, syntheticExplorerMoves('e1a1'));
+  assert.equal(rook.uciMove, 'e1a1', 'an ordinary rook move must not be rewritten as castling');
+});
+
+test('Explorer castling transport persists canonical moves and follows the resulting child positions', async (t) => {
+  const config = await workspace(t);
+  config.acquisition.tokenFile = await fixtureCredential(t);
+  const catalog = new Catalog(config);
+  cleanCatalog(t, catalog, config);
+  const fen = rejectedExplorerFens[0];
+  const payload = syntheticExplorerMoves('e1h1');
+  const acquisition = new ExplorerAcquisition(catalog, config, {
+    fetchImpl: async () => new Response(JSON.stringify(payload), { status: 200 }),
+  });
+  const dataset = await acquisition.initialize();
+  // The temporary catalog's ordinary seed is not the fixture position.
+  const seed = catalog.nextFrontier(Number(dataset.id));
+  catalog.completeFrontier(Number(dataset.id), seed.fingerprint, { responseDigest: '0'.repeat(64), refreshDays: 30 });
+  const key = polyglotKey(fen);
+  catalog.enqueueFrontier(Number(dataset.id), { fen, key, keyBuffer: keyBuffer(key), fingerprint: positionFingerprint(fen), ply: 6 });
+  const report = await acquisition.run({ permit: async () => ({ allowed: true, mode: 'courtesy' }) }, { maxRequests: 1 });
+  assert.equal(report.positions, 1);
+  assert.equal(report.moves, 1);
+  assert.equal(report.enqueued, 1);
+  const [observation] = catalog.aggregateObservations({ includeFixtures: false });
+  assert.equal(observation.uciMove, 'e1g1');
+  assert.equal(observation.rawMove, encodePolyglotMove('e1g1'));
+  const child = catalog.nextFrontier(Number(dataset.id));
+  assert.equal(child.via_move, 'e1g1');
+  assert.equal(child.fen, 'r1bqk1nr/ppppbppp/2n1p3/8/2B1P3/5N2/PPPP1PPP/RNBQ1RK1 b kq - 0 1');
+});
+
+test('Explorer rejects Chess960 acquisition configuration', async (t) => {
+  const config = await workspace(t);
+  t.after(() => rm(config.workspace, { recursive: true, force: true }));
+  await mkdir(config.workspace, { recursive: true });
+  const filename = path.join(config.workspace, 'chess960.json');
+  await writeFile(filename, JSON.stringify({ schema: config.schema, acquisition: { variant: 'chess960' } }));
+  await assert.rejects(loadConfig({ configFile: filename, workspace: config.workspace }), /provider contract/);
 });
 
 test('Explorer rejects malformed results and fails closed when its credential is unavailable', async (t) => {
