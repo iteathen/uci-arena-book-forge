@@ -1,7 +1,7 @@
 {
   "schema": "uci_arena_standalone_service_contract_v1",
   "component_id": "book_forge.service",
-  "component_version": "0.4.6",
+  "component_version": "0.4.7",
   "cli_entrypoint": "services/book-forge/src/cli.mjs",
   "configuration_schema": "uci_arena_book_forge_config_v1",
   "status_schema": "uci_arena_book_forge_status_v2",
