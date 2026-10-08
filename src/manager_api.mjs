@@ -120,6 +120,7 @@ async function outputRecord(catalog, config, row) {
     compatibility: {
       component_id: 'opening_book.standard',
       consumer_component_id: 'uci_arena.engine',
+      consumer_contract: 'uci_arena_book_snapshot_v2',
       snapshot_schema: manifest.schema,
     },
     summary: {

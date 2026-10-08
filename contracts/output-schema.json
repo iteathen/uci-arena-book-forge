@@ -23,7 +23,7 @@
     "compatibility": {
       "type": "object", "additionalProperties": false,
       "required": ["component_id", "consumer_component_id", "snapshot_schema"],
-      "properties": {"component_id": {"const": "opening_book.standard"}, "consumer_component_id": {"const": "uci_arena.engine"}, "snapshot_schema": {"const": "uci_arena_book_snapshot_v2"}}
+      "properties": {"component_id": {"const": "opening_book.standard"}, "consumer_component_id": {"const": "uci_arena.engine"}, "consumer_contract": {"const": "uci_arena_book_snapshot_v2"}, "snapshot_schema": {"const": "uci_arena_book_snapshot_v2"}}
     },
     "summary": {"type": "object", "additionalProperties": false, "required": ["record_count"], "properties": {"record_count": {"type": "integer", "minimum": 1, "maximum": 2000000}}},
     "artifact": {
