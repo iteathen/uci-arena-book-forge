@@ -330,6 +330,15 @@ manager_integration_api:
     - startup_recover
   output_schema: uci_arena_service_output_v1
   output_kind: opening_book.snapshot
+  consumer_compatibility:
+    consumer_contract: uci_arena_book_snapshot_v2
+    rule: >
+      A published consumer_contract names the neutral immutable snapshot reader
+      contract. Any engine implementing that exact contract may consume the
+      artifact after its own full identity, digest, authority and applicability
+      checks. consumer_component_id remains the legacy routing hint; it does
+      not exclude other conforming readers when consumer_contract is present.
+      Outputs without consumer_contract retain their original legacy meaning.
   rules:
     - "The installed component manifest is the only discovery authority for the API entrypoint, version, transport, and invocation prefix."
     - "Manager invokes the service CLI and consumes one JSON response; Book Forge never calls or imports Manager."

@@ -248,10 +248,13 @@ test('Manager API opening-book output matches its closed packaged schema surface
   const response = await listOutputsApi(catalog, config);
   assert.equal(response.payload.outputs.length, 1);
   const output = response.payload.outputs[0];
+  assert.equal(output.compatibility.consumer_contract, 'uci_arena_book_snapshot_v2');
+  assert.equal(output.compatibility.consumer_component_id, 'uci_arena.engine', 'legacy routing hint is retained');
   const schema = JSON.parse(await readFile(new URL('../contracts/output-schema.json', import.meta.url), 'utf8'));
   assert.deepEqual(Object.keys(output).sort(), [...schema.required].sort());
   for (const field of ['state', 'authority', 'compatibility', 'summary', 'artifact']) {
-    assert.deepEqual(Object.keys(output[field]).sort(), [...schema.properties[field].required].sort());
+    assert.deepEqual(Object.keys(output[field]).sort(), Object.keys(schema.properties[field].properties).sort());
+    for (const required of schema.properties[field].required) assert.ok(Object.hasOwn(output[field], required));
   }
   assert.equal(output.artifact.live_channel_root, await realpath(path.resolve(config.paths.published, 'integration')));
 });
