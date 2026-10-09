@@ -4,6 +4,8 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { packageRoot } from './config.mjs';
+import { observeDaemonActivity, observeDaemonDrainObstacle } from './daemon_observation.mjs';
+import { WindowsTaskScheduler } from '@uci-arena/background-service-runtime/windows-task-scheduler';
 
 const execFileAsync = promisify(execFile);
 export const startupTaskName = 'UCI Arena Book Forge';
@@ -99,32 +101,28 @@ async function currentUserSid() {
   return match[1];
 }
 
-function decodeXmlValue(xml, tag) {
-  const match = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(xml);
-  if (!match) return null;
-  return match[1].replaceAll('&quot;', '"').replaceAll('&apos;', "'").replaceAll('&gt;', '>')
-    .replaceAll('&lt;', '<').replaceAll('&amp;', '&');
-}
-
-export async function queryWindowsStartup(config, { execFileImpl = execFileAsync } = {}) {
+export async function queryWindowsStartup(config, {
+  taskScheduler = new WindowsTaskScheduler(), activityImpl = observeDaemonActivity,
+  drainImpl = observeDaemonDrainObstacle,
+} = {}) {
   requireWindows();
-  try {
-    const { stdout } = await execFileImpl('schtasks.exe', ['/Query', '/TN', startupTaskName, '/XML'], {
-      windowsHide: true, timeout: 10_000, maxBuffer: 1024 * 1024,
-    });
-    const expected = startupAction(config);
-    const actual = {
-      command: decodeXmlValue(stdout, 'Command'),
-      arguments: decodeXmlValue(stdout, 'Arguments'),
-      workingDirectory: decodeXmlValue(stdout, 'WorkingDirectory'),
-    };
-    const enabledValues = [...stdout.matchAll(/<Enabled>(true|false)<\/Enabled>/giu)].map((match) => match[1] === 'true');
-    return { platform: 'windows', installed: true, enabled: enabledValues.every(Boolean), taskName: startupTaskName, action: actual,
-      matchesCurrentConfiguration: actual.command === expected.command && actual.arguments === expected.arguments && actual.workingDirectory === expected.workingDirectory };
-  } catch (error) {
-    if (error.code === 1) return { platform: 'windows', installed: false, enabled: false, taskName: startupTaskName, matchesCurrentConfiguration: false };
-    throw new Error(`Could not query Windows startup task: ${error.stderr?.trim() || error.message}`);
-  }
+  const result = await taskScheduler.perform({ operation: 'inspect', task_path: `\\${startupTaskName}` },
+    { timeoutMs: 10000 });
+  if (result.outcome !== 'completed') throw new Error('Book Forge Windows startup observation failed');
+  const observed = result.observation;
+  const expected = startupAction(config);
+  const activity = await activityImpl(config);
+  const drainObstacle = await drainImpl(config);
+  const actual = observed.action;
+  return { platform: 'windows', installed: observed.registered,
+    enabled: observed.registered ? observed.enabled : false, taskName: startupTaskName,
+    ...(observed.registered ? { action: { command: actual.command, arguments: actual.arguments,
+      workingDirectory: actual.working_directory } } : {}),
+    active: activity.active, activityState: activity.state, ownerLive: activity.ownerLive,
+    drainObstacle, runningInstanceCount: observed.instance_guids.length,
+    serviceManagerActive: observed.instance_guids.length > 0,
+    matchesCurrentConfiguration: Boolean(observed.registered && actual.command === expected.command &&
+      actual.arguments === expected.arguments && actual.working_directory === expected.workingDirectory) };
 }
 
 export async function installWindowsStartup(config) {
