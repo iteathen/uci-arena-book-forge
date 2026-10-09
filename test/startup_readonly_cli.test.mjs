@@ -22,3 +22,19 @@ test('public startup status branches before Catalog construction or migration', 
   assert.equal(output.startup.active, null);
   assert.equal(output.startup.activityState, 'unverifiable');
 });
+
+test('neutral lifecycle dispatch never constructs or migrates Catalog; closed operation/root arguments', async () => {
+  let output; let called = 0;
+  const dependencies = { loadConfigImpl: async () => ({ workspace: 'fixture' }),
+    configureIdentityImpl: async () => {}, CatalogImpl: class { constructor() { throw Error('Catalog must not open'); } },
+    lifecycleImpl: async (_config, request) => { called++; return { operation: request.operation, disposition: 'failed' }; },
+    outputImpl: value => { output = value; } };
+  await main({ ...dependencies, argv: ['lifecycle', 'pre_replace', '--workspace', 'fixture', '--previous-root', 'A', '--replacement-root', 'B'] });
+  assert.equal(output.operation, 'pre_replace');
+  assert.equal(called, 1);
+  await assert.rejects(main({ ...dependencies, argv: ['lifecycle', 'install', '--previous-root', 'A', '--replacement-root', 'B'] }));
+  await assert.rejects(main({ ...dependencies, argv: ['lifecycle', 'post_replace', '--previous-root', 'A'] }));
+  await assert.rejects(main({ ...dependencies, argv: ['lifecycle', 'install', '--arbitrary', 'value'] }));
+  await assert.rejects(main({ ...dependencies, argv: ['lifecycle', 'install', '--workspace', 'A', '--workspace', 'B'] }));
+  assert.equal(called, 1);
+});

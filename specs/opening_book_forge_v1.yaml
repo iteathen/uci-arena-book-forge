@@ -518,3 +518,29 @@ provider_release_reproducibility_2026_08_01:
     - "The exact native toolchain receipt binds component id, target, source commit, workflow identity, and primary plus reproduction build roles."
     - "Linux Book Forge and opening-book artifacts contain no native helper bytes and neither require nor invent native toolchain evidence."
     - "A mismatch blocks publication and reports both archive digests plus the first differing payload path."
+
+provider_lifecycle_windows_v3:
+  owner: book_forge_cli
+  target: windows-x86_64
+  public_contract: arena_provider_startup_control_v3
+  result_contract: arena_provider_lifecycle_result_v1
+  transactional_authority: arena_provider_lifecycle_transactional_v1
+  rules:
+    - "The neutral lifecycle CLI branches before Catalog construction or migration."
+    - "Pre captures actual before state and a staged-public-payload/root/launch plan without guessing a future Node tuple; post admits and persists the actual destination/runtime binding before effects. Controller paths are not operation identities."
+    - "After positively proven quiescence only, immutable0.4.4 restoration may transactionally reverse the exact schema4-to5 transient identity delta without altering historical records; unknown schemas or live/unknown retained identities fail without change."
+    - "Original bounded private before-state is persisted before any task gate, registration, run, or deletion effect."
+    - "The full admitted component/runtime/action/workspace/configuration binding identifies desired state; root equality alone never identifies retry or compensation."
+    - "Successive same-root runtime upgrades capture the actual current enablement and running-intent baseline; repeated and inverse requests converge or fail safely."
+    - "Actual daemon activity and exact process absence remain distinct from Task registration and task-instance count."
+    - "An unverifiable live legacy orphan fails without PID killing, nonce replacement, or invocation of immutable legacy controllers."
+    - "Restored legacy activity requires prior absence, controlled exact-task restart, fresh nonce/phase/heartbeat, exact OS birth/Node executable and unchanged task definition/instance."
+    - "Windows registration uses the public SDK flag38 suppression of registration triggers; run is explicit."
+    - "Windows v3 is selected only in Book's closed producer target map. Linux retains its existing v1 manifest and standalone behavior; Linux v3 is not implemented or qualified."
+  validation:
+    - durable_before_state_before_effect
+    - repeated_and_partial_forward_compensation
+    - successive_same_root_full_runtime_binding
+    - disabled_inactive_baseline_preservation
+    - orphan_unknown_and_foreign_intent_fail_closed
+    - owned_uuid_windows_task_ready_drain_restore

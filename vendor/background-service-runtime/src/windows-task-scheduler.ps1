@@ -43,8 +43,7 @@ function ValidateXml([string]$xml) {
         if ($document.DocumentElement.LocalName -ne 'Task' -or $document.DocumentElement.NamespaceURI -ne 'http://schemas.microsoft.com/windows/2004/02/mit/task') { Fail 'invalid_request' }
     } finally { $reader.Dispose() }
 }
-function VerifyPrincipal($definition) {
-    $user = [string]$definition.Principal.UserId
+function ResolveUserSid([string]$user) {
     # Task Scheduler canonicalizes a SID to an account-name representation.
     # Resolve that representation through Windows rather than guessing aliases.
     try {
@@ -54,8 +53,11 @@ function VerifyPrincipal($definition) {
             $account = New-Object Security.Principal.NTAccount($user)
             $resolved = $account.Translate([Security.Principal.SecurityIdentifier])
         }
-        $user = $resolved.Value
+        return $resolved.Value
     } catch { Fail 'unsupported_principal' }
+}
+function VerifyPrincipal($definition) {
+    $user = ResolveUserSid ([string]$definition.Principal.UserId)
     if ($user -ne $currentSid -or $definition.Principal.LogonType -ne 3 -or $definition.Principal.RunLevel -ne 0 -or $definition.Actions.Count -ne 1 -or $definition.Actions.Item(1).Type -ne 0) { Fail 'unsupported_principal' }
     return [ordered]@{ current_user_sid=$currentSid; user_sid=$user; logon_type=3; run_level=0 }
 }
@@ -65,6 +67,14 @@ function NewDefinition([string]$xml) {
     $definition.XmlText = $xml
     $null = VerifyPrincipal $definition
     $definition.Principal.UserId = $currentSid
+    # Explicit logon users have the same SID/account representation rule.
+    # Empty means any user and must never acquire the current principal.
+    for ($i=1; $i -le $definition.Triggers.Count; $i++) {
+        $trigger = $definition.Triggers.Item($i)
+        if ($trigger.Type -eq 9 -and -not [string]::IsNullOrEmpty([string]$trigger.UserId)) {
+            $trigger.UserId = ResolveUserSid ([string]$trigger.UserId)
+        }
+    }
     if (-not [string]::IsNullOrEmpty($definition.RegistrationInfo.URI) -and $definition.RegistrationInfo.URI -ne $request.task_path) { Fail 'identity_mismatch' }
     $definition.RegistrationInfo.URI = $request.task_path
     return $definition
@@ -98,12 +108,25 @@ function GetTask {
     }
 }
 function Instances($task) {
-    $collection = $task.GetInstances(0)
-    if ($collection.Count -gt $contract.bounds.maximum_instances) { Fail 'output_limit' }
+    # GetInstances(0) may omit Hidden tasks even at the admitted current-user
+    # privilege. GetRunningTasks(1) explicitly includes hidden instances.
+    # Observe verifies the selected principal before this enumeration. Foreign
+    # entries contribute only their Path to the exact selected-task filter.
+    $selectedPath = [string]$task.Path
+    if (-not [string]::Equals($selectedPath, [string]$request.task_path, [StringComparison]::OrdinalIgnoreCase)) { Fail 'identity_mismatch' }
+    $collection = $service.GetRunningTasks(1)
+    $count = $collection.Count
+    if ($count -lt 0 -or $count -gt $contract.bounds.maximum_running_tasks_inspected) { Fail 'output_limit' }
     $result = @()
-    for ($i=1; $i -le $collection.Count; $i++) {
+    $seen = @{}
+    for ($i=1; $i -le $count; $i++) {
         $item = $collection.Item($i)
-        $result += @{ id=([guid]$item.InstanceGuid).ToString('B').ToUpperInvariant(); instance=$item }
+        if (-not [string]::Equals([string]$item.Path, $selectedPath, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if ($result.Count -ge $contract.bounds.maximum_instances) { Fail 'output_limit' }
+        $id = ([guid]$item.InstanceGuid).ToString('B').ToUpperInvariant()
+        if ($id -eq [guid]::Empty.ToString('B').ToUpperInvariant() -or $seen.ContainsKey($id)) { Fail 'instance_mismatch' }
+        $seen[$id] = $true
+        $result += @{ id=$id; instance=$item }
     }
     return ,$result
 }

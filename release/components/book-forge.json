@@ -105,5 +105,101 @@
     "npm_lock": "package-lock.json",
     "upstream_vendor_lock": "vendor/upstream.lock.json"
   },
-  "tests": ["book_forge_tests", "startup_contract", "bootstrap_snapshot_validation"]
+  "tests": ["book_forge_tests", "startup_contract", "bootstrap_snapshot_validation"],
+  "installer_integration_by_target": {
+    "windows-x86_64": {
+      "schema": "arena_provider_installer_integration_v1",
+      "schema_version": 1,
+      "entrypoint": "installer_integration",
+      "invocation": {
+        "kind": "dependency_runtime",
+        "runtime_component_id": "node_runtime.private",
+        "runtime_entrypoint": "node"
+      },
+      "arguments": [
+        "--context"
+      ],
+      "workspace_name": "book-forge",
+      "workspace_placement": "product_data",
+      "configure_when_disabled": false,
+      "dependency_bindings": [
+        {
+          "name": "stockfish",
+          "component_id": "stockfish.engine",
+          "source": "entrypoint",
+          "entrypoint": "stockfish",
+          "required": true
+        }
+      ],
+      "locator_bindings": [
+        {
+          "name": "lichess_token_path",
+          "kind": "lichess_token_path",
+          "required": false
+        }
+      ],
+      "startup_control": {
+        "schema": "arena_provider_startup_control_v3",
+        "schema_version": 3,
+        "entrypoint": "cli",
+        "operations": {
+          "install": {
+            "arguments": [
+              "lifecycle",
+              "install"
+            ],
+            "success_dispositions": [
+              "ready",
+              "safe_inactive"
+            ]
+          },
+          "uninstall": {
+            "arguments": [
+              "lifecycle",
+              "uninstall"
+            ],
+            "success_dispositions": [
+              "ready"
+            ]
+          },
+          "pre_replace": {
+            "arguments": [
+              "lifecycle",
+              "pre_replace"
+            ],
+            "success_dispositions": [
+              "ready"
+            ]
+          },
+          "post_replace": {
+            "arguments": [
+              "lifecycle",
+              "post_replace"
+            ],
+            "success_dispositions": [
+              "ready",
+              "safe_inactive"
+            ]
+          }
+        },
+        "workspace_argument": {
+          "relative_path": ".",
+          "flag": "--workspace"
+        },
+        "configuration_argument": "--config",
+        "replacement_arguments": {
+          "replacement_root": "--replacement-root",
+          "previous_root": "--previous-root"
+        }
+      }
+    }
+  },
+  "entrypoints_by_target": {
+    "windows-x86_64": {
+      "process_identity_helper": "services/book-forge/native/bin/uci_arena_background_guard.exe",
+      "startup_launcher": "services/book-forge/native/bin/uci_arena_service_launcher.exe",
+      "cli": "services/book-forge/src/cli.mjs",
+      "installer_integration": "services/book-forge/src/installer_integration.mjs"
+    }
+  }
 }

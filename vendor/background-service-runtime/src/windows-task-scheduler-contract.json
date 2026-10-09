@@ -11,6 +11,7 @@
     "definition_utf8_bytes": 1048576,
     "action_field_utf16_units": 32767,
     "maximum_instances": 16,
+    "maximum_running_tasks_inspected": 4096,
     "request_bytes": 3145728,
     "response_bytes": 8388608,
     "timeout_ms": 30000

@@ -192,7 +192,7 @@ test('actual owned UUID task register and enabled changes converge on repeated r
   const definition_xml = `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
 <RegistrationInfo><Description>SDK owned UUID fixture</Description><URI>${escape(task_path)}</URI></RegistrationInfo>
-<Triggers><RegistrationTrigger><Enabled>true</Enabled></RegistrationTrigger></Triggers>
+<Triggers><RegistrationTrigger><Enabled>true</Enabled></RegistrationTrigger><LogonTrigger><Enabled>true</Enabled><UserId>${sid}</UserId></LogonTrigger></Triggers>
 <Principals><Principal id="Owner"><UserId>${sid}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
 <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><AllowHardTerminate>true</AllowHardTerminate><Enabled>true</Enabled><UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>
 <Actions Context="Owner"><Exec><Command>${escape(process.execPath)}</Command><Arguments>${escape('"' + script + '"')}</Arguments><WorkingDirectory>${escape(root)}</WorkingDirectory></Exec></Actions></Task>`;
@@ -216,6 +216,25 @@ test('actual owned UUID task register and enabled changes converge on repeated r
       'registration must not execute a registration trigger before explicit run');
     result = await scheduler.perform(register);
     assert.equal(result.outcome, 'completed', JSON.stringify(result));
+    const logonUser = /<LogonTrigger(?:\s[^>]*)?>[\s\S]*?<UserId>([^<]+)<\/UserId>/u.exec(result.observation.definition_xml)?.[1];
+    assert.ok(logonUser, 'registered explicit logon trigger remains present');
+    console.log(JSON.stringify({schema:'sdk_owned_logon_identity_observation_v1',
+      representationChanged:logonUser!==sid, semanticRetry:'completed'}));
+    const logon = '<LogonTrigger><Enabled>true</Enabled><UserId>' + sid + '</UserId></LogonTrigger>';
+    for (const replacement of [
+      '<LogonTrigger><Enabled>true</Enabled><UserId>S-1-5-18</UserId></LogonTrigger>',
+      '<LogonTrigger><Enabled>true</Enabled></LogonTrigger>',
+      '<LogonTrigger><Enabled>false</Enabled><UserId>' + sid + '</UserId></LogonTrigger>',
+      '<LogonTrigger><Enabled>true</Enabled><UserId>' + sid + '</UserId><Delay>PT1S</Delay></LogonTrigger>',
+    ]) {
+      const differing = await scheduler.perform({...register,
+        definition_xml:definition_xml.replace(logon,replacement)});
+      assert.equal(differing.outcome,'failed');assert.equal(differing.failure.category,'identity_mismatch');
+      assert.equal((await inspect()).observation.definition_sha256,result.observation.definition_sha256);
+    }
+    const unknown = await scheduler.perform({...register,definition_xml:definition_xml.replace(logon,
+      '<LogonTrigger><Enabled>true</Enabled><UserId>' + escape(process.env.COMPUTERNAME+'\\UCI_ARENA_SDK_UNKNOWN_'+randomUUID()) + '</UserId></LogonTrigger>')});
+    assert.equal(unknown.outcome,'failed');assert.equal(unknown.failure.category,'unsupported_principal');
     const admittedDigest = result.observation.definition_sha256;
     const substituted = await scheduler.perform({ ...register,
       definition_xml: definition_xml.replace('SDK owned UUID fixture', 'changed fixture definition') });

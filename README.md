@@ -193,3 +193,5 @@ Sources remain independently removable without replaying other PGNs:
 node src/cli.mjs source quarantine 12 --workspace E:\book-forge
 node src/cli.mjs source restore 12 --workspace E:\book-forge
 ```
+
+Windows producer lifecycle v3 and its private before-state, readiness and legacy ownership limits are documented in [contracts/provider-lifecycle.md](contracts/provider-lifecycle.md). Linux retains the existing v1 port; Linux v3 is not qualified.

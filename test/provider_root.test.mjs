@@ -5,13 +5,15 @@ import { mkdtemp, mkdir, writeFile, readFile, realpath, lstat, rm } from 'node:f
 import path from 'node:path';
 import os from 'node:os';
 import { admitBookComponentRoot } from '../src/provider_root.mjs';
+import { WindowsBookLifecyclePlatform } from '../src/windows_provider_lifecycle.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 async function fixture(t, version = '0.4.9') {
   const parent = await realpath(os.tmpdir());
   const root = await realpath(await mkdtemp(path.join(parent, 'book-component-root-')));
   t.after(async () => {
-    const resolved = await realpath(root);
+    let resolved;
+    try { resolved = await realpath(root); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
     const status = await lstat(root);
     assert.equal(path.dirname(resolved), parent);
     assert.ok(path.basename(resolved).startsWith('book-component-root-'));
@@ -49,6 +51,24 @@ test('exact public component root admits declared roles and entire inventoried c
   assert.equal(descriptor.launcher, path.join(f.root, f.manifest.entrypoints.startup_launcher));
   assert.equal(descriptor.componentManifestSha256, sha(await readFile(path.join(f.root, 'arena-component.json'))));
   assert.equal(Object.isFrozen(descriptor), true);
+});
+
+test('physically retired completed source is optional history, but requested restoration requires exact payload', async t => {
+  const old = await fixture(t); const current = await fixture(t);
+  const oldDescriptor = await admitBookComponentRoot(old.root);
+  const parent = await realpath(os.tmpdir()); const resolved = await realpath(old.root); const stat = await lstat(old.root);
+  assert.equal(path.dirname(resolved), parent); assert.ok(path.basename(resolved).startsWith('book-component-root-'));
+  assert.ok(stat.isDirectory() && !stat.isSymbolicLink()); await rm(resolved, { recursive: true });
+  const calls = [];
+  const platform = new WindowsBookLifecyclePlatform({ workspace: 'C:\\fixture-workspace' }, {
+    roots: [current.root], candidateRoots: [old.root], executableIdentity: async () => 'f'.repeat(64),
+    scheduler: { perform: async request => { calls.push(request); return { outcome: 'completed', observation: {
+      registered: false, principal: null, instance_guids: [] } }; } }, userSid: 'S-1-5-21-123',
+  });
+  await platform.begin([{ before: { root: oldDescriptor.root }, desired: { root: oldDescriptor.root }, postDone: true }]);
+  assert.equal((await platform.desired({ replacementRoot: current.root })).root, current.root);
+  await assert.rejects(platform.desired({ replacementRoot: old.root }));
+  assert.equal(calls.every(request => request.operation === 'inspect'), true);
 });
 
 test('transitive substitution and absent inventory role reject before task control', async t => {

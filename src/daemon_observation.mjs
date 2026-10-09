@@ -7,6 +7,7 @@ import {
   probeProcessInstance,
   processIdentityFromJson,
   sameProcessInstance,
+  validProcessIdentity,
 } from './process_identity.mjs';
 
 const STALE_MS = 300_000;
@@ -19,6 +20,32 @@ const nonce = value => typeof value === 'string' &&
   /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(value);
 const guid = value => typeof value === 'string' &&
   /^\{[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}\}$/u.test(value);
+
+// Missing legacy lock after an owned stop is not enough. The surviving readonly
+// catalog/heartbeat must be well formed and still describe the captured PID;
+// malformed/replacement packets never become absence.
+export async function observeCapturedDaemonExit(config, { identity, nonce: capturedNonce,
+  now = Date.now, probe = probeProcessInstance, Database = DatabaseSync } = {}) {
+  let database;
+  try {
+    if (!validProcessIdentity(identity) || !nonce(capturedNonce) ||
+        await readDaemonOwnershipPacket(path.join(config.paths.locks, 'daemon.lock')) !== null) return false;
+    const heartbeat = await readDaemonOwnershipPacket(config.daemonHeartbeatFile);
+    if (heartbeat !== null) {
+      if (!heartbeat.value || heartbeat.value.pid !== identity.pid ||
+          !Number.isFinite(Date.parse(heartbeat.value.heartbeatAt)) || Date.parse(heartbeat.value.heartbeatAt) > now()) return false;
+      if (Object.hasOwn(heartbeat.value, 'processIdentity') &&
+          (!sameProcessInstance(heartbeat.value.processIdentity, identity) || heartbeat.value.nonce !== capturedNonce)) return false;
+    }
+    const stat = lstatSync(config.paths.catalog);
+    if (!stat.isFile() || stat.isSymbolicLink()) return false;
+    database = new Database(config.paths.catalog, { readOnly: true });
+    const row = database.prepare('SELECT pid,substr(phase,1,65) AS phase FROM daemon_state WHERE singleton=1').get();
+    if (!row || row.pid !== identity.pid || !PHASES.has(row.phase)) return false;
+    return probe(identity.pid)?.state === 'absent';
+  } catch { return false; }
+  finally { try { database?.close(); } catch { return false; } }
+}
 
 // Diagnostic/control obstacle only. Even a real present incarnation at a
 // legacy record's PID is neither old-incarnation ownership nor kill authority.

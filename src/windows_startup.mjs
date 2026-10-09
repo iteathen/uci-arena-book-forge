@@ -27,24 +27,27 @@ export function quoteWindowsArgument(value) {
   return `"${text.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1')}"`;
 }
 
-export function startupAction(config) {
-  const argumentsList = ['--restart', path.resolve(process.execPath), cliPath, 'daemon', '--workspace', config.workspace];
+export function startupAction(config, { descriptor = null, nodeExecutable = process.execPath } = {}) {
+  const paths = descriptor && (/^[a-z]:[\\/]/iu.test(descriptor.root) || /^\\\\[^\\]+\\[^\\]+/u.test(descriptor.root)) ? path.win32 : path;
+  const argumentsList = ['--restart', paths.resolve(nodeExecutable), descriptor?.cli ?? cliPath, 'daemon', '--workspace', config.workspace];
   if (config.configFile) argumentsList.push('--config', config.configFile);
   return {
-    command: path.resolve(config.nativeLauncher),
+    command: paths.resolve(descriptor?.launcher ?? config.nativeLauncher),
     arguments: argumentsList.map(quoteWindowsArgument).join(' '),
-    workingDirectory: packageRoot,
+    workingDirectory: descriptor?.packageRoot ?? packageRoot,
   };
 }
 
-export function buildTaskXml(config, userSid) {
+export function buildTaskXml(config, userSid, { descriptor = null, nodeExecutable = process.execPath, enabled = true,
+  taskName = startupTaskName } = {}) {
   if (!/^S-\d(?:-\d+)+$/.test(userSid)) throw new Error(`Invalid Windows user SID: ${userSid}`);
-  const action = startupAction(config);
+  if (!/^[A-Za-z0-9 ._-]{1,128}$/u.test(taskName)) throw new Error('Invalid Book task name');
+  const action = startupAction(config, { descriptor, nodeExecutable });
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>Continuously improves and publishes UCI Arena opening-book snapshots.</Description>
-    <URI>\\${startupTaskName}</URI>
+    <URI>\\${xmlEscape(taskName)}</URI>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>
@@ -72,7 +75,8 @@ export function buildTaskXml(config, userSid) {
       <RestartOnIdle>true</RestartOnIdle>
     </IdleSettings>
     <AllowStartOnDemand>true</AllowStartOnDemand>
-    <Enabled>true</Enabled>
+    <Enabled>${enabled ? 'true' : 'false'}</Enabled>
+    <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
     <Hidden>true</Hidden>
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>false</WakeToRun>
@@ -94,8 +98,9 @@ export function buildTaskXml(config, userSid) {
 `;
 }
 
-async function currentUserSid() {
-  const { stdout } = await execFileAsync('whoami.exe', ['/user', '/fo', 'csv', '/nh'], { windowsHide: true, timeout: 5_000 });
+export async function currentUserSid() {
+  const { stdout } = await execFileAsync(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'whoami.exe'),
+    ['/user', '/fo', 'csv', '/nh'], { windowsHide: true, timeout: 5_000 });
   const match = /"[^"]+","(S-\d(?:-\d+)+)"/.exec(stdout.trim());
   if (!match) throw new Error('Could not determine the current Windows user SID');
   return match[1];
@@ -155,7 +160,9 @@ export async function installWindowsStartup(config) {
   } catch (error) {
     throw new Error(`Startup task was installed but could not be started: ${error.stderr?.trim() || error.stdout?.trim() || error.message}`);
   }
-  return { ...status, started: true, evidencePath };
+  // Scheduler Run is intent only. Keep the actual after-run daemon observation
+  // distinct; never promote the earlier pre-run query to active evidence.
+  return { ...(await queryWindowsStartup(config)), started: true, evidencePath };
 }
 
 export async function startWindowsStartup(config, {

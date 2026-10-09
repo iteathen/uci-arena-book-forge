@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtemp, mkdir, writeFile, realpath, lstat, rm, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { observeOwnedLegacyActivity, observeDaemonDrainObstacle } from '../src/daemon_observation.mjs';
+import { observeOwnedLegacyActivity, observeDaemonDrainObstacle, observeCapturedDaemonExit } from '../src/daemon_observation.mjs';
 
 const origin = Date.parse('2026-10-09T12:00:00.000Z');
 const identity = { schema: 'uci_arena_process_instance_identity_v1', platform: 'win32', pid: 12345,
@@ -51,6 +51,21 @@ test('controlled old-format restart combines fresh nonce, task scope and exact O
   assert.equal(result.active, true);
   assert.equal(result.ownerLive, true);
   assert.deepEqual(await readFile(config.paths.catalog), before);
+});
+
+test('lock-removed captured exit requires known residual metadata; malformed or replacement heartbeat fails', async t => {
+  const config = await fixture(t);
+  await rm(path.join(config.paths.locks, 'daemon.lock'));
+  const options = { identity, nonce: '22222222-2222-4222-8222-222222222222', now: () => origin + 40,
+    probe: () => ({ state: 'absent' }) };
+  assert.equal(await observeCapturedDaemonExit(config, options), true);
+  await writeFile(config.daemonHeartbeatFile, '{malformed');
+  assert.equal(await observeCapturedDaemonExit(config, options), false);
+  await writeFile(config.daemonHeartbeatFile, JSON.stringify({ pid: identity.pid + 1, heartbeatAt: new Date(origin + 30).toISOString() }));
+  assert.equal(await observeCapturedDaemonExit(config, options), false);
+  await rm(config.daemonHeartbeatFile);
+  assert.equal(await observeCapturedDaemonExit(config, options), true);
+  assert.equal(await observeCapturedDaemonExit(config, { ...options, probe: () => ({ state: 'unverifiable' }) }), false);
 });
 
 test('readonly legacy record reports only its current incarnation obstacle, never daemon activity', async t => {

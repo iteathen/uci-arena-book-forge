@@ -114,6 +114,34 @@ definition rejection, enabled retries, run/gate/drain/delete, helper timeout and
 cancellation are tested. These fixtures grant no installed-service replacement
 claim. Other platforms and normal package tests explicitly skip these cases.
 
+Version 1.3.1 corrects explicit logon-trigger user comparison. Windows may
+rewrite a declared SID as an account name on registration. The SDK translates
+each nonempty `LogonTrigger.UserId` through Windows SID resolution, just like
+the principal, before semantic comparison. Empty UserId remains any-user;
+different identities, trigger enabled state and delay remain different. Unknown
+accounts fail closed. No trigger is removed, defaulted or broadened. The request,
+result and contract wire versions stay at v1; version 1.3.0 source snapshots
+remain historical. The actual owned UUID fixture covers SID/account readback,
+retry, distinct/empty users and trigger-setting rejection without touching
+installed provider tasks. See Microsoft's
+[LogonTrigger.UserId contract](https://learn.microsoft.com/en-us/windows/win32/taskschd/logontrigger-userid).
+
+Version 1.3.2 corrects running-instance visibility for Hidden tasks. The owned
+Windows fixture reproduced a live current-user Hidden Node task for which
+`GetInstances(0)` returned no instances. The SDK now uses
+[GetRunningTasks(1)](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskservice-getrunningtasks),
+whose explicit flag includes Hidden tasks, then filters the captured admitted
+`Task.Path` with ordinal case-insensitive comparison. The selected principal is
+verified first. Only foreign entries' paths are read for this filter; their
+definitions, actions, principals and instance GUIDs are not read or returned.
+The 4096-entry scan and 16-selected-instance bounds fail closed on overflow,
+without reporting absence. Duplicate/empty selected GUIDs also fail. Definition
+and exact-instance mutation guards remain unchanged. The v1 wire schemas stay
+unchanged; the contract adds the explicit scan bound. Historical 1.3.1 snapshots
+remain distinct. Guarded fixtures cover both the existing plain task and two
+self-expiring Hidden tasks, rejecting another task's GUID set before stopping
+the selected task and positively joining both owned children and task deletion.
+
 ## Exact process instance query
 
 `uci_arena_background_guard --query-process-instance <pid>` accepts decimal PIDs

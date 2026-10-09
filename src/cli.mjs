@@ -20,6 +20,7 @@ import {
   validateConfigApi,
 } from './manager_api.mjs';
 import { publishSnapshot } from './publisher.mjs';
+import { runBookLifecycle } from './provider_command.mjs';
 import {
   installStartup,
   queryStartup,
@@ -40,6 +41,7 @@ function parseArguments(argv) {
       continue;
     }
     const key = token.slice(2);
+    if (argv[0] === 'lifecycle' && Object.hasOwn(options, key)) throw new Error('Duplicate Book lifecycle option');
     if (['once', 'json', 'detach'].includes(key)) options[key] = true;
     else {
       if (index + 1 >= argv.length || argv[index + 1].startsWith('--')) throw new Error(`Missing value for --${key}`);
@@ -64,7 +66,7 @@ export function apiOperationFromArguments(argv) {
 export async function main({ argv = process.argv.slice(2), loadConfigImpl = loadConfig,
   configureIdentityImpl = configureProcessIdentity, CatalogImpl = Catalog,
   queryStartupImpl = queryStartup, readStartupEvidenceImpl = readStartupEvidence,
-  outputImpl = output } = {}) {
+  outputImpl = output, lifecycleImpl = runBookLifecycle } = {}) {
   const { positional, options } = parseArguments(argv);
   const [command, subcommand, argument, detail] = positional;
   if (!command) throw new Error('Usage: book-forge <init|source <add|quarantine|retire|restore>|acquisition <run|status|retry-auth>|daemon|start|stop|pause|resume|status|snapshot build|qualification record|maintain|validate|publish|startup <install|status|recover|uninstall>|api <describe|status|outputs <list|inspect>|config validate|startup recover>>');
@@ -72,6 +74,18 @@ export async function main({ argv = process.argv.slice(2), loadConfigImpl = load
   const pureOperation = command === 'validate' || (command === 'api' &&
     (subcommand === 'describe' || (subcommand === 'config' && argument === 'validate')));
   if (!pureOperation) await configureIdentityImpl(config);
+  if (command === 'lifecycle') {
+    if (!['install', 'uninstall', 'pre_replace', 'post_replace'].includes(subcommand) || argument !== undefined ||
+        Object.keys(options).some(key => !['workspace', 'config', 'previous-root', 'replacement-root'].includes(key))) {
+      throw new Error('Invalid Book lifecycle invocation');
+    }
+    const replacing = ['pre_replace', 'post_replace'].includes(subcommand);
+    if (replacing !== (options['previous-root'] !== undefined && options['replacement-root'] !== undefined) ||
+        (!replacing && (options['previous-root'] !== undefined || options['replacement-root'] !== undefined))) throw new Error('Invalid Book lifecycle root arguments');
+    outputImpl(await lifecycleImpl(config, { operation: subcommand,
+      previousRoot: options['previous-root'], replacementRoot: options['replacement-root'] }));
+    return;
+  }
   if (command === 'validate') {
     output({ ok: true, ...(await validateSnapshot(path.resolve(subcommand))) });
     return;
