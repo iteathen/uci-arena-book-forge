@@ -174,3 +174,10 @@ test('retained lock or heartbeat does not become catalog-only legacy absence',as
   await writeFile(f.config.daemonHeartbeatFile,JSON.stringify({pid:12345,heartbeatAt:'2026-10-01T00:00:00.000Z'}));
   assert.equal((await observeDaemonActivity(f.config,{probe:()=>({state:'absent'})})).active,null);
 });
+for(const column of ['cycle_started_at','cycle_completed_at']) {
+  test(`oversized nullable legacy ${column} cannot become a legitimate null timestamp`,async t=>{
+    const f=await restoredLegacy(t);f.edit(`UPDATE daemon_state SET ${column}=?`,'x'.repeat(33));
+    let queries=0;const result=await observeDaemonActivity(f.config,{probe:()=>{queries++;return{state:'absent'}}});
+    assert.equal(result.active,null);assert.equal(queries,0);
+  });
+}

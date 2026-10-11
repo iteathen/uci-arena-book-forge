@@ -27,7 +27,9 @@ function restoredLegacyCatalogAbsent(database, probe) {
   const columns = database.prepare('PRAGMA table_info(daemon_state)').all().map(row=>row.name);
   if (columns.length !== fields.length || !fields.every(field=>columns.includes(field)) ||
       database.prepare("SELECT CASE WHEN length(CAST(value AS BLOB))<=32 THEN value ELSE NULL END AS value FROM metadata WHERE key='schema_version'").get()?.value !== '5') return false;
-  const bounded = (column,limit) => `CASE WHEN length(CAST(${column} AS BLOB))<=${limit} THEN ${column} ELSE NULL END AS ${column}`;
+  // Preserve a stored nullable stamp; oversized values get a nonstring sentinel
+  // so they cannot collapse into legitimate historical NULL.
+  const bounded = (column,limit) => `CASE WHEN ${column} IS NULL THEN NULL WHEN length(CAST(${column} AS BLOB))<=${limit} THEN ${column} ELSE 0 END AS ${column}`;
   const row = database.prepare(`SELECT singleton,pid,${bounded('phase',64)},${bounded('process_identity',1)},
     ${['started_at','heartbeat_at','cycle_started_at','cycle_completed_at','updated_at'].map(column=>bounded(column,32)).join(',')},
     ${bounded('resource_mode',256)},${bounded('last_report',65536)},${bounded('last_error',2048)} FROM daemon_state WHERE singleton=1`).get();
