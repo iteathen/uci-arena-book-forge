@@ -63,7 +63,7 @@ async function withHeavyLease(factory, work) {
   }
 }
 
-async function readLockPacket(filename) {
+export async function readDaemonOwnershipPacket(filename) {
   try {
     const link = await lstat(filename);
     if (!link.isFile() || link.isSymbolicLink() || link.size > MAXIMUM_PROCESS_IDENTITY_RECORD_BYTES) {
@@ -97,6 +97,8 @@ async function readLockPacket(filename) {
     return { value: null, raw: null, modifiedMs: 0 };
   }
 }
+
+const readLockPacket = readDaemonOwnershipPacket;
 
 async function legacyHeartbeatIsFresh(config, lock, now) {
   try {

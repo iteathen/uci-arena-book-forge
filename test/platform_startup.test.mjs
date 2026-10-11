@@ -10,7 +10,27 @@ import { packageRoot } from '../src/config.mjs';
 import {
   buildTaskXml,
   queryWindowsStartup,
+  startupAction,
 } from '../src/windows_startup.mjs';
+
+test('Task0 and current legacy PID presence remain separate from daemon activity', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const config = { workspace: 'C:\\Owned Fixture Workspace', nativeLauncher: 'C:\\Owned Fixture\\launcher.exe' };
+  const action = startupAction(config);
+  const result = await queryWindowsStartup(config, {
+    taskScheduler: { perform: async () => ({ outcome: 'completed', observation: {
+      registered: true, enabled: true, instance_guids: [], action: { command: action.command,
+        arguments: action.arguments, working_directory: action.workingDirectory } } }) },
+    activityImpl: async () => ({ state: 'unverifiable', active: null, ownerLive: null }),
+    drainImpl: async () => ({ state: 'present', authority: 'current-incarnation-at-record-pid-only',
+      currentIncarnation: null }),
+  });
+  assert.equal(result.serviceManagerActive, false);
+  assert.equal(result.active, null);
+  assert.equal(result.ownerLive, null);
+  assert.equal(result.drainObstacle.state, 'present');
+});
 
 test('Linux startup unit is per-user, relocatable, and least privilege', () => {
   const config = {
@@ -39,7 +59,7 @@ test('Linux startup unit path honors XDG_CONFIG_HOME', () => {
   assert.ok(os.homedir());
 });
 
-test('Windows startup inspection treats omitted default Enabled values as true', {
+test('Windows startup inspection retains the qualified platform default Enabled value', {
   skip: process.platform !== 'win32',
 }, async () => {
   const config = {
@@ -47,10 +67,11 @@ test('Windows startup inspection treats omitted default Enabled values as true',
     configFile: 'C:\\Arena Config\\book-forge.json',
     nativeLauncher: 'C:\\Arena Suite\\book-forge\\launcher.exe',
   };
-  const normalizedXml = buildTaskXml(config, 'S-1-5-21-1-2-3-1001')
-    .replaceAll('    <Enabled>true</Enabled>\n', '');
+  const action = startupAction(config);
   const status = await queryWindowsStartup(config, {
-    execFileImpl: async () => ({ stdout: normalizedXml }),
+    taskScheduler: { perform: async () => ({ outcome: 'completed', observation: {
+      registered: true, enabled: true, instance_guids: [], action: {
+        command: action.command, arguments: action.arguments, working_directory: action.workingDirectory } } }) },
   });
 
   assert.equal(status.installed, true);
@@ -66,13 +87,37 @@ test('Windows startup inspection preserves an explicit disabled value', {
     configFile: 'C:\\Arena Config\\book-forge.json',
     nativeLauncher: 'C:\\Arena Suite\\book-forge\\launcher.exe',
   };
-  const disabledXml = buildTaskXml(config, 'S-1-5-21-1-2-3-1001')
-    .replace('<Enabled>true</Enabled>', '<Enabled>false</Enabled>');
+  const action = startupAction(config);
   const status = await queryWindowsStartup(config, {
-    execFileImpl: async () => ({ stdout: disabledXml }),
+    taskScheduler: { perform: async () => ({ outcome: 'completed', observation: {
+      registered: true, enabled: false, instance_guids: [], action: {
+        command: action.command, arguments: action.arguments, working_directory: action.workingDirectory } } }) },
   });
 
   assert.equal(status.installed, true);
   assert.equal(status.enabled, false);
   assert.equal(status.matchesCurrentConfiguration, true);
+});
+
+test('Windows startup activity is an independent producer observation', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const config = {
+    workspace: 'C:\\Arena Fixtures\\Book Forge',
+    nativeLauncher: 'C:\\Arena Fixtures\\launcher.exe',
+  };
+  const action = startupAction(config);
+  for (const [state, active] of [['active', true], ['inactive', false], ['unverifiable', null]]) {
+    const status = await queryWindowsStartup(config, {
+      taskScheduler: { perform: async () => ({ outcome: 'completed', observation: {
+        registered: true, enabled: true, instance_guids: [], action: {
+          command: action.command, arguments: action.arguments, working_directory: action.workingDirectory } } }) },
+      activityImpl: async () => ({ state, active }),
+    });
+    assert.equal(status.installed, true);
+    assert.equal(status.matchesCurrentConfiguration, true);
+    assert.equal(status.activityState, state);
+    assert.equal(status.active, active);
+    assert.equal(Object.hasOwn(status, 'started'), false);
+  }
 });

@@ -290,12 +290,14 @@ daemon_observability:
     control_singleton_type: boolean
     control_paused_type: boolean
     daemon_active_type: boolean
-    daemon_active_authority: "A fresh heartbeat plus a live matching process id and a running or recovering phase; a receipt, lock file, task registration, or historical status row alone is never active authority."
+    daemon_active_authority: "A fresh heartbeat plus a live exact process incarnation and a running or recovering phase; a receipt, lock file, task registration, or historical status row alone is never active authority."
     startup_projection: "Public CLI and Manager API status report platform startup registration, enablement, configuration match, and live daemon activity as distinct fields; unavailable inspection is explicit and never inferred from retained evidence."
     rule: >
       Public JSON normalizes SQLite integer storage into typed booleans; storage
       representation must not leak across the CLI contract.
   rules:
+    - "startup status dispatches before Catalog construction, schema initialization, migration, workspace rebasing, or acquisition. Its owner observation opens the existing catalog read-only and never repairs records."
+    - "Startup activity is active/inactive/unverifiable; unavailable activity is null, not false. A present current incarnation at a legacy record PID is a conservative drain obstacle only, never original-incarnation ownership, daemon activity, or PID-kill authority. Task0 is a Task Scheduler observation only, never daemon exit proof."
     - "The singleton lock and heartbeat bind one exact process instance using a provider-owned nonce plus an OS-derived process-start identity. A numeric pid alone is never owner authority."
     - "Windows identity-dependent composition qualifies process_instance_query_v1 from the explicit selected NativeResourceHelper before using its public queryProcessInstanceSync operation. Pure describe, configuration validation, and artifact validation require no native connection; Linux retains its /proc adapter."
     - "Windows process observations have no PowerShell, discovery, retry, or prewarming fallback. Their admitted PID, exact UTC DateTime.Ticks string, executable-path range, and maximum two-second query budget come from the pinned public native process-instance contract; a smaller caller budget is passed without expansion."
@@ -380,7 +382,7 @@ windows_startup:
     - "The task allows battery startup because the Book Forge resource governor immediately enters backoff on battery or battery-saver state."
     - "Multiple task instances are forbidden and the daemon lock remains the final single-instance authority."
     - "Installation is idempotent, starts the task immediately by default, writes non-secret registration evidence in the workspace, and never embeds credentials."
-    - "Task Scheduler query XML may omit default-true task and trigger Enabled elements. Startup inspection treats omission as enabled, preserves any explicit false as disabled, and never infers enablement from a running daemon or retained evidence."
+    - "Startup inspection uses the pinned public SDK's captured TaskDefinition Enabled boolean and exact typed Exec action; it never parses a private XML formatter or infers enablement from daemon activity. Full saved definitions preserve trigger settings separately from the task gate."
     - "start and startup recover run the existing task and stop ends its current instance without deleting the registration; either start form fails clearly when the task is not registered or no longer matches the current provider configuration."
     - "startup uninstall ends the scheduled instance, deletes the task, and removes only Book Forge startup-registration evidence."
   validation:
@@ -516,3 +518,30 @@ provider_release_reproducibility_2026_08_01:
     - "The exact native toolchain receipt binds component id, target, source commit, workflow identity, and primary plus reproduction build roles."
     - "Linux Book Forge and opening-book artifacts contain no native helper bytes and neither require nor invent native toolchain evidence."
     - "A mismatch blocks publication and reports both archive digests plus the first differing payload path."
+
+provider_lifecycle_windows_v3:
+  owner: book_forge_cli
+  target: windows-x86_64
+  public_contract: arena_provider_startup_control_v3
+  result_contract: arena_provider_lifecycle_result_v1
+  transactional_authority: arena_provider_lifecycle_transactional_v1
+  rules:
+    - "The neutral lifecycle CLI branches before Catalog construction or migration."
+    - "Pre captures actual before state and a staged-public-payload/root/launch plan without guessing a future Node tuple; post admits and persists the actual destination/runtime binding before effects. Controller paths are not operation identities."
+    - "After positively proven quiescence only, immutable0.4.4 restoration may transactionally reverse the exact schema4-to5 transient identity delta without altering historical records; unknown schemas or live/unknown retained identities fail without change."
+    - "Original bounded private before-state is persisted before any task gate, registration, run, or deletion effect."
+    - "Private Task XML and its typed action must admit one consistent Microsoft Task Exec before callbacks, catalog restoration or task effects; original XML/triggers/settings are preserved, and captured gate facts agree."
+    - "The full admitted component/runtime/action/workspace/configuration binding identifies desired state; root equality alone never identifies retry or compensation."
+    - "Successive same-root runtime upgrades capture the actual current enablement and running-intent baseline; repeated and inverse requests converge or fail safely."
+    - "Actual daemon activity and exact process absence remain distinct from Task registration and task-instance count."
+    - "An unverifiable live legacy orphan fails without PID killing, nonce replacement, or invocation of immutable legacy controllers."
+    - "Restored legacy activity requires prior absence, controlled exact-task restart, fresh nonce/phase/heartbeat, exact OS birth/Node executable and unchanged task definition/instance."
+    - "Windows registration uses the public SDK flag38 suppression of registration triggers; run is explicit."
+    - "Windows v3 is selected only in Book's closed producer target map. Linux retains its existing v1 manifest and standalone behavior; Linux v3 is not implemented or qualified."
+  validation:
+    - durable_before_state_before_effect
+    - repeated_and_partial_forward_compensation
+    - successive_same_root_full_runtime_binding
+    - disabled_inactive_baseline_preservation
+    - orphan_unknown_and_foreign_intent_fail_closed
+    - owned_uuid_windows_task_ready_drain_restore

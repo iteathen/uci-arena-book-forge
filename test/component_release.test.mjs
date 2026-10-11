@@ -6,7 +6,32 @@ import {
   validatedActivation,
   validatedDiscovery,
   validateWindowsRuntimeOwnership,
+  selectInstallerIntegration,
+  validatedStartupControl,
 } from "../tools/release/component_release.mjs";
+
+test('target-specific producer selection preserves Linux v1 and closes Windows v3 declaration', () => {
+  const definition = JSON.parse(readFileSync(new URL('../release/components/book-forge.json', import.meta.url)));
+  const windows = selectInstallerIntegration(definition, 'windows-x86_64');
+  const linux = selectInstallerIntegration(definition, 'linux-x86_64');
+  assert.equal(windows.startup_control.schema_version, 3);
+  assert.equal(linux.startup_control.schema_version, 1);
+  assert.equal(linux.startup_control.result.envelope, 'startup');
+  const entrypoints = definition.entrypoints_by_target['windows-x86_64'];
+  assert.doesNotThrow(() => validatedStartupControl(windows.startup_control, entrypoints));
+  for (const mutation of [control => { control.result = {}; }, control => { delete control.operations.post_replace; },
+    control => { control.operations.pre_replace.success_dispositions.push('safe_inactive'); },
+    control => { control.schema_version = 4; }, control => { control.operations.arbitrary = {}; }]) {
+    const control = structuredClone(windows.startup_control); mutation(control);
+    assert.throws(() => validatedStartupControl(control, entrypoints));
+  }
+  assert.throws(() => selectInstallerIntegration(definition, 'unsupported-target'));
+  assert.throws(() => selectInstallerIntegration({ ...definition, installer_integration_by_target: [] }, 'windows-x86_64'));
+  assert.throws(() => selectInstallerIntegration({ ...definition, installer_integration_by_target: { 'foreign-target': {} } }, 'linux-x86_64'));
+  assert.throws(() => selectInstallerIntegration({ ...definition, installer_integration_by_target: {
+    'windows-x86_64': { ...windows, extra: true },
+  } }, 'windows-x86_64'));
+});
 
 test("component discovery is role-declared and locator-bounded", () => {
   assert.deepEqual(

@@ -194,7 +194,8 @@ export async function publicStatus(catalog, config, queryImpl = queryStartup) {
         inspectionReason: '',
         registered: Boolean(startup.installed),
         enabled: Boolean(startup.enabled),
-        serviceManagerActive: typeof startup.active === 'boolean' ? startup.active : null,
+        serviceManagerActive: typeof startup.serviceManagerActive === 'boolean' ? startup.serviceManagerActive
+          : typeof startup.active === 'boolean' ? startup.active : null,
         daemonActive: status.daemon.active,
         matchesCurrentConfiguration: typeof startup.matchesCurrentConfiguration === 'boolean'
           ? startup.matchesCurrentConfiguration : null,

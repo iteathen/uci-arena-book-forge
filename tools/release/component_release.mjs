@@ -41,6 +41,53 @@ const FORBIDDEN_WINDOWS_SYSTEM_DLLS = new Set([
   "ws2_32.dll",
 ]);
 
+const closedFields = (value, fields) => value && typeof value === 'object' && !Array.isArray(value) &&
+  Object.keys(value).length === fields.length && fields.every(field => Object.hasOwn(value, field));
+
+export function selectInstallerIntegration(definition, target) {
+  if (!['windows-x86_64', 'linux-x86_64'].includes(target)) throw Error('Unsupported provider target');
+  const map = definition.installer_integration_by_target;
+  if (map !== undefined && (!map || typeof map !== 'object' || Array.isArray(map) ||
+      Object.keys(map).some(key => !['windows-x86_64', 'linux-x86_64'].includes(key)) ||
+      Object.values(map).some(value => !value || typeof value !== 'object' || Array.isArray(value)))) throw Error('Invalid target installer integration map');
+  const selected = map?.[target] ?? definition.installer_integration;
+  const fields = ['schema', 'schema_version', 'entrypoint', 'invocation', 'arguments', 'workspace_name',
+    'workspace_placement', 'configure_when_disabled', 'dependency_bindings', 'locator_bindings', 'startup_control'];
+  if (map !== undefined && Object.values(map).some(value => !closedFields(value, fields))) throw Error('Invalid target installer integration fields');
+  return structuredClone(selected);
+}
+
+export function validatedStartupControl(control, entrypoints) {
+  const reject = () => { throw Error('Invalid provider startup-control contract'); };
+  if (!control || !Object.hasOwn(entrypoints, control.entrypoint) ||
+      !closedFields(control.workspace_argument, ['flag', 'relative_path']) ||
+      control.workspace_argument.flag !== '--workspace' || control.workspace_argument.relative_path !== '.' ||
+      control.configuration_argument !== '--config') return reject();
+  if (control.schema === 'arena_provider_startup_control_v1' && control.schema_version === 1) {
+    if (!closedFields(control, ['schema', 'schema_version', 'entrypoint', 'actions', 'workspace_argument', 'configuration_argument', 'result']) ||
+        !closedFields(control.actions, ['install', 'uninstall']) ||
+        JSON.stringify(control.actions.install) !== JSON.stringify(['startup', 'install']) ||
+        JSON.stringify(control.actions.uninstall) !== JSON.stringify(['startup', 'uninstall']) ||
+        !closedFields(control.result, ['envelope', 'require_configuration_match_on_install', 'require_live_on_install']) ||
+        control.result.envelope !== 'startup' || control.result.require_configuration_match_on_install !== true ||
+        control.result.require_live_on_install !== false) return reject();
+    return true;
+  }
+  if (control.schema !== 'arena_provider_startup_control_v3' || control.schema_version !== 3 ||
+      !closedFields(control, ['schema', 'schema_version', 'entrypoint', 'operations', 'workspace_argument', 'configuration_argument', 'replacement_arguments']) ||
+      !closedFields(control.operations, ['install', 'uninstall', 'pre_replace', 'post_replace']) ||
+      !closedFields(control.replacement_arguments, ['previous_root', 'replacement_root']) ||
+      control.replacement_arguments.previous_root !== '--previous-root' || control.replacement_arguments.replacement_root !== '--replacement-root') return reject();
+  for (const operation of ['install', 'uninstall', 'pre_replace', 'post_replace']) {
+    const selection = control.operations[operation];
+    if (!closedFields(selection, ['arguments', 'success_dispositions']) ||
+        JSON.stringify(selection.arguments) !== JSON.stringify(['lifecycle', operation]) ||
+        JSON.stringify(selection.success_dispositions) !== JSON.stringify(
+          ['install', 'post_replace'].includes(operation) ? ['ready', 'safe_inactive'] : ['ready'])) return reject();
+  }
+  return true;
+}
+
 export function validateWindowsRuntimeOwnership(files, target) {
   if (target !== "windows-x86_64") return;
   const forbidden = files.filter(({ path: relative }) => {
@@ -521,8 +568,8 @@ export function buildComponent({
       return componentId;
     });
     let installerIntegration;
-    if (definition.installer_integration !== undefined) {
-      installerIntegration = structuredClone(definition.installer_integration);
+    if (definition.installer_integration !== undefined || definition.installer_integration_by_target !== undefined) {
+      installerIntegration = selectInstallerIntegration(definition, target);
       const integrationEntrypoint = installerIntegration.entrypoint;
       const invocation = installerIntegration.invocation;
       const startupControl = installerIntegration.startup_control;
@@ -539,17 +586,7 @@ export function buildComponent({
           || !/^[A-Za-z0-9._-]+$/u.test(invocation.runtime_entrypoint ?? "")
           || !Array.isArray(installerIntegration.dependency_bindings)
           || !Array.isArray(installerIntegration.locator_bindings)
-          || startupControl?.schema !== "arena_provider_startup_control_v1"
-          || startupControl.schema_version !== 1
-          || !Object.hasOwn(entrypoints, startupControl.entrypoint)
-          || JSON.stringify(startupControl.actions?.install) !== JSON.stringify(["startup", "install"])
-          || JSON.stringify(startupControl.actions?.uninstall) !== JSON.stringify(["startup", "uninstall"])
-          || startupControl.workspace_argument?.flag !== "--workspace"
-          || startupControl.workspace_argument?.relative_path !== "."
-          || startupControl.configuration_argument !== "--config"
-          || startupControl.result?.envelope !== "startup"
-          || startupControl.result?.require_configuration_match_on_install !== true
-          || startupControl.result?.require_live_on_install !== false) {
+          || !validatedStartupControl(startupControl, entrypoints)) {
         throw new Error("provider installer-integration contract is invalid");
       }
     }

@@ -73,6 +73,13 @@ commands control the registered task without creating or deleting it.
 `daemon --detach`
 remains available for temporary sessions that are not managed by Windows.
 
+`startup status` is a read-only diagnostic route that branches before catalog
+initialization or migration. Windows task registration, task enablement, running
+instance count and daemon activity are independent observations. Activity can be
+`unverifiable` (`active:null`); a current incarnation at a legacy record PID is
+reported only as a drain obstacle. Zero Task Scheduler instances never prove that
+an old daemon has exited. No PID termination or record repair occurs during status.
+
 `pause` and `resume` are durable control commands. The daemon runs at low OS
 priority and uses phase-specific resource permits. While `uci_arena_engine.exe`
 is running, low-rate Explorer acquisition and bounded integration
@@ -186,3 +193,5 @@ Sources remain independently removable without replaying other PGNs:
 node src/cli.mjs source quarantine 12 --workspace E:\book-forge
 node src/cli.mjs source restore 12 --workspace E:\book-forge
 ```
+
+Windows producer lifecycle v3 and its private before-state, readiness and legacy ownership limits are documented in [contracts/provider-lifecycle.md](contracts/provider-lifecycle.md). Linux retains the existing v1 port; Linux v3 is not qualified.
