@@ -21,6 +21,30 @@ const nonce = value => typeof value === 'string' &&
 const guid = value => typeof value === 'string' &&
   /^\{[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}\}$/u.test(value);
 
+function restoredLegacyCatalogAbsent(database, probe) {
+  const fields = ['singleton','pid','phase','process_identity','started_at','heartbeat_at',
+    'cycle_started_at','cycle_completed_at','resource_mode','last_report','last_error','updated_at'];
+  const columns = database.prepare('PRAGMA table_info(daemon_state)').all().map(row=>row.name);
+  if (columns.length !== fields.length || !fields.every(field=>columns.includes(field)) ||
+      database.prepare("SELECT CASE WHEN length(CAST(value AS BLOB))<=32 THEN value ELSE NULL END AS value FROM metadata WHERE key='schema_version'").get()?.value !== '5') return false;
+  const bounded = (column,limit) => `CASE WHEN length(CAST(${column} AS BLOB))<=${limit} THEN ${column} ELSE NULL END AS ${column}`;
+  const row = database.prepare(`SELECT singleton,pid,${bounded('phase',64)},${bounded('process_identity',1)},
+    ${['started_at','heartbeat_at','cycle_started_at','cycle_completed_at','updated_at'].map(column=>bounded(column,32)).join(',')},
+    ${bounded('resource_mode',256)},${bounded('last_report',65536)},${bounded('last_error',2048)} FROM daemon_state WHERE singleton=1`).get();
+  const stamp = value => {
+    if (typeof value !== 'string') return false;
+    try { return new Date(value).toISOString() === value; } catch { return false; }
+  };
+  if (!row || row.singleton !== 1 || !Number.isSafeInteger(row.pid) || row.pid < 1 || row.pid > 0xffff_ffff ||
+      row.process_identity !== '' || !PHASES.has(row.phase) ||
+      ![row.started_at,row.heartbeat_at,row.updated_at].every(stamp) ||
+      ![row.cycle_started_at,row.cycle_completed_at].every(value=>value === null || stamp(value)) ||
+      ![row.resource_mode,row.last_report,row.last_error].every(value=>typeof value === 'string')) return false;
+  // This recognized migrated legacy shape carries no incarnation. Only native
+  // positive PID absence proves inactivity; a present/reused PID never does.
+  return probe(row.pid)?.state === 'absent';
+}
+
 // Missing legacy lock after an owned stop is not enough. The surviving readonly
 // catalog/heartbeat must be well formed and still describe the captured PID;
 // malformed/replacement packets never become absence.
@@ -99,6 +123,9 @@ export async function observeDaemonActivity(config, { now = Date.now,
       FROM daemon_state WHERE singleton=1`).get();
     if (!row) return unknown();
     if (row.pid === null && row.process_identity === '' && !lock && !heartbeat) return inactive();
+    if (row.process_identity === '' && !lock && !heartbeat) {
+      return restoredLegacyCatalogAbsent(database,probe) ? inactive() : unknown();
+    }
     if (!Number.isSafeInteger(row.pid) || typeof row.process_identity !== 'string' ||
         Buffer.byteLength(row.process_identity) > MAXIMUM_PROCESS_IDENTITY_RECORD_BYTES ||
         !PHASES.has(row.phase)) return unknown();

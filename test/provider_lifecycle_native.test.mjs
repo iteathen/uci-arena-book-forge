@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { loadConfig, packageRoot } from '../src/config.mjs';
@@ -13,15 +13,20 @@ import { WindowsBookLifecyclePlatform } from '../src/windows_provider_lifecycle.
 import { convergeBookLifecycle } from '../src/provider_lifecycle.mjs';
 import { currentUserSid } from '../src/windows_startup.mjs';
 import { WindowsTaskScheduler } from '@uci-arena/background-service-runtime/windows-task-scheduler';
+import { Catalog } from '../src/catalog.mjs';
+import packageDocument from '../package.json' with { type: 'json' };
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
-test('owned Windows Book task: actual daemon ready, before-state, repeated drain/restart and normal uninstall', {
+test('owned Windows Book task: C-to-E catalog-only legacy restore, actual daemon ready and normal joined lifecycle', {
   skip: process.platform !== 'win32', timeout: 120000,
 }, async () => {
   const parent = await realpath(os.tmpdir());
   const fixture = await realpath(await mkdtemp(path.join(parent, 'book-v3-task-')));
   const root = path.join(fixture, 'component'); const destination = path.join(root, 'services/book-forge');
-  const workspace = path.join(fixture, 'workspace');
+  const sourceWorkspace = path.join(fixture, 'retained-source');
+  const sourceBackup = path.join(fixture, 'retained-source-backup');
+  const eParent = await realpath(await mkdtemp('E:/uci-arena-task-builds/book-v3-restored-'));
+  const workspace = path.join(eParent, 'workspace');
   const taskPath = `\\UCI Arena Book Forge Test ${randomUUID()}`;
   const scheduler = new WindowsTaskScheduler();
   let ownedConfig = null, runRequested = false;
@@ -51,15 +56,28 @@ test('owned Windows Book task: actual daemon ready, before-state, repeated drain
     }
     await inventory(root); files.sort((a, b) => a.path.localeCompare(b.path));
     await writeFile(path.join(root, 'arena-component.json'), JSON.stringify({
-      schema: 'arena_install_component_v1', schema_version: 1, component_id: 'book_forge.service', component_version: '0.4.9',
+      schema: 'arena_install_component_v1', schema_version: 1, component_id: 'book_forge.service', component_version: packageDocument.version,
       target_triple: 'windows-x86_64', entrypoints: { cli: 'services/book-forge/src/cli.mjs',
         startup_launcher: 'services/book-forge/native/bin/uci_arena_service_launcher.exe',
         process_identity_helper: 'services/book-forge/native/bin/uci_arena_background_guard.exe' }, files,
     }));
-    await mkdir(workspace);
+    await mkdir(sourceWorkspace);await mkdir(workspace);
+    const retained = new Catalog(await loadConfig({workspace:sourceWorkspace}));
+    const stamp='2026-10-01T00:00:00.000Z';
+    retained.setMetadata('historical_fixture','preserved opaque history');
+    retained.updateDaemonState({pid:2147483600,phase:'sleep',process_identity:'',started_at:stamp,heartbeat_at:stamp});
+    // Exact historical schema4 shape before ordinary producer migration.
+    retained.database.exec('ALTER TABLE daemon_state DROP COLUMN process_identity');
+    retained.setMetadata('schema_version','4');retained.close();
+    const sourceBytes=await readFile(path.join(sourceWorkspace,'catalog.sqlite'));
+    await cp(path.join(sourceWorkspace,'catalog.sqlite'),path.join(workspace,'catalog.sqlite'));
+    await rename(sourceWorkspace,sourceBackup);
+    // No lock/heartbeat/runtime authority is copied into the fresh E workspace.
+    const migrated = new Catalog(await loadConfig({workspace}));migrated.close();
     const configFile = path.join(workspace, 'config.json');
     await writeFile(configFile, JSON.stringify({ schema: 'uci_arena_book_forge_config_v1', workspace,
       acquisition: { enabled: false }, analysis: { enabled: false },
+      resources: { minimumFreeWorkspaceGb: 100000 },
       nativeHelper: path.join(destination, 'native/bin/uci_arena_background_guard.exe'),
       nativeLauncher: path.join(destination, 'native/bin/uci_arena_service_launcher.exe') }));
     const config = await loadConfig({ configFile, workspace });
@@ -80,7 +98,7 @@ test('owned Windows Book task: actual daemon ready, before-state, repeated drain
           catch (error) { console.error(`owned fixture ${operation}/${method}: ${error.stack}`); throw error; }
         };
       }
-      return convergeBookLifecycle({ operation, previousRoot: root, replacementRoot: root }, { platform, store, version: '0.4.9' });
+      return convergeBookLifecycle({ operation, previousRoot: root, replacementRoot: root }, { platform, store, version: packageDocument.version });
     };
     const installed = await call('install'); assert.equal(installed.disposition, 'ready', JSON.stringify(installed));
     assert.equal(installed.observed.activity, 'active');
@@ -90,6 +108,14 @@ test('owned Windows Book task: actual daemon ready, before-state, repeated drain
     assert.equal((await call('post_replace')).disposition, 'ready');
     assert.equal((await call('post_replace')).disposition, 'ready');
     assert.equal((await call('uninstall')).disposition, 'ready');
+    assert.deepEqual(await readFile(path.join(sourceBackup,'catalog.sqlite')),sourceBytes);
+    const finalCatalog=new Catalog(config);
+    try{assert.equal(finalCatalog.metadata('historical_fixture'),'preserved opaque history');}finally{finalCatalog.close();}
+    await writeFile(path.join(eParent,'observation.json'),JSON.stringify({schema:'book_restored_native_lifecycle_fixture_v1',
+      version:packageDocument.version,sourceBackup,workspace,sourceCatalogSha256:sha(sourceBytes),originalBytesPreserved:true,
+      catalogOnlyCopy:true,locksHeartbeatStartupAuthorityCopied:false,legacyPid:2147483600,
+      nativeInstallReady:true,repeatedForwardInverse:true,normalUninstallReady:true,ownedTaskPath:taskPath,
+      fixtureDisposition:'E workspace/receipt retained; C component/fixture removed only after exact owned task/child closure'},null,2));
     assert.equal((await call('uninstall')).disposition, 'ready');
     safelyClosed = true;
   } finally {

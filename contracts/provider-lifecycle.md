@@ -111,3 +111,15 @@ an explicit fixture skip. Local qualification supplies both, verifies the public
 inventory and actual Node24 version, then proves24-pre/26-post/24-inverse for both
 different-root and same-root transactions, including an absent final destination
 and renamed rollback controller. It reads no installed provider data.
+
+Source0.4.10 adds a narrow fresh-restoration case for a recognized legacy
+catalog-only owner. The ordinary schema4-to5 migration can retain an old integer
+PID with empty `process_identity` after a preserving copy omits locks and
+heartbeat. An exact known migrated row shape and positive native PID absence
+establish inactivity without inventing identity or editing the catalog. Present
+or reused PID, malformed declared identity, unknown/oversized row shape, retained
+owner packets and unavailable native queries remain unverifiable. Dates validate
+the historical shape; expiry never proves exit. SDK Task admission and durable
+before-state ordering remain unchanged. Source qualification uses an owned
+C-to-E catalog-only copy with native lifecycle closure; publication still
+requires independent review and fresh official release evidence.

@@ -56,6 +56,9 @@ test('exact public component root admits declared roles and entire inventoried c
   assert.equal(Object.isFrozen(descriptor), true);
   await assert.rejects(admitBookComponentRoot(f.root, { platform: 'linux' }), /component root admission failed/);
 });
+test('current0.4.10 exact public inventory is admitted without retiring historical supported versions',async t=>{
+  const f=await fixture(t,'0.4.10');assert.equal((await admitWindowsRoot(f.root)).componentVersion,'0.4.10');
+});
 
 test('physically retired completed source is optional history, but requested restoration requires exact payload', async t => {
   const old = await fixture(t); const current = await fixture(t);

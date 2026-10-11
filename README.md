@@ -195,3 +195,10 @@ node src/cli.mjs source restore 12 --workspace E:\book-forge
 ```
 
 Windows producer lifecycle v3 and its private before-state, readiness and legacy ownership limits are documented in [contracts/provider-lifecycle.md](contracts/provider-lifecycle.md). Linux retains the existing v1 port; Linux v3 is not qualified.
+
+The0.4.10 source candidate supports a preserving fresh restore that omits runtime
+locks and heartbeat: a recognized migrated legacy catalog-only daemon row can
+prove inactivity through positive native PID absence. Present or unverifiable
+PIDs and malformed identity/record shapes remain blocked. This read-only rule
+does not fabricate identity or alter historical catalog data; fresh release and
+installed acceptance remain separate gates.

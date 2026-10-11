@@ -124,3 +124,53 @@ test('observation resource-close failure is typed unavailable', async () => {
   const result = await observeDaemonActivity(config, { Database: BrokenClose });
   assert.equal(result.active, null);
 });
+
+async function restoredLegacy(t) {
+  const f=await fixture(t),db=new DatabaseSync(f.config.paths.catalog),stamp='2026-10-01T00:00:00.000Z';
+  db.exec(`DROP TABLE daemon_state; CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT);
+    INSERT INTO metadata VALUES('schema_version','5');
+    CREATE TABLE daemon_state(singleton INTEGER PRIMARY KEY,pid INTEGER,phase TEXT,process_identity TEXT,
+      started_at TEXT,heartbeat_at TEXT,cycle_started_at TEXT,cycle_completed_at TEXT,
+      resource_mode TEXT,last_report TEXT,last_error TEXT,updated_at TEXT);`);
+  db.prepare('INSERT INTO daemon_state VALUES(1,12345,?,\'\',?,?,NULL,NULL,?,?,?,?)').run('sleep',stamp,stamp,'backoff','{}','',stamp);db.close();
+  return {...f,edit(sql,...args){const selected=new DatabaseSync(f.config.paths.catalog);try{selected.prepare(sql).run(...args);}finally{selected.close()}}};
+}
+test('known schema4-to5 restored catalog-only owner admits positive absence without inventing identity',async t=>{
+  const f=await restoredLegacy(t),before=await readFile(f.config.paths.catalog),queries=[];
+  const result=await observeDaemonActivity(f.config,{probe:pid=>{queries.push(pid);return{state:'absent'}}});
+  assert.deepEqual(result,{state:'inactive',active:false,ownerLive:false,identity:null});assert.deepEqual(queries,[12345]);
+  assert.deepEqual(await readFile(f.config.paths.catalog),before);
+});
+test('legacy catalog-only present reused denied and unknown PID observations stay unavailable',async t=>{
+  const f=await restoredLegacy(t);
+  for(const probe of [()=>({state:'present',identity:exactIdentity()}),()=>({state:'present',identity:exactIdentity({start_token:'639111234567890124'})}),
+    ()=>({state:'unverifiable'}),()=>null,()=>({state:'unknown'}),()=>{throw Error('PRIVATE_CANARY')}]) {
+    assert.equal((await observeDaemonActivity(f.config,{probe})).active,null);
+  }
+});
+test('malformed declared identity and unknown historical shapes cannot downgrade to legacy absence',async t=>{
+  const f=await restoredLegacy(t);
+  for(const identity of ['null','{}','malformed',' '.repeat(3)]) {
+    f.edit('UPDATE daemon_state SET process_identity=?',identity);let queries=0;
+    assert.equal((await observeDaemonActivity(f.config,{probe:()=>{queries++;return{state:'absent'}}})).active,null);assert.equal(queries,0);
+  }
+  f.edit("UPDATE daemon_state SET process_identity=''");
+  for(const [column,value]of [['pid','wrong'],['phase','foreign'],['started_at','invalid'],['heartbeat_at',null],
+    ['cycle_completed_at','invalid'],['resource_mode',null],['last_report','x'.repeat(65537)],['last_error','x'.repeat(2049)],['updated_at','invalid']]) {
+    const db=new DatabaseSync(f.config.paths.catalog),prior=db.prepare(`SELECT ${column} AS value FROM daemon_state`).get().value;db.close();
+    f.edit(`UPDATE daemon_state SET ${column}=?`,value);
+    assert.equal((await observeDaemonActivity(f.config,{probe:()=>({state:'absent'})})).active,null,column);
+    f.edit(`UPDATE daemon_state SET ${column}=?`,prior);
+  }
+  f.edit("UPDATE metadata SET value='4'");assert.equal((await observeDaemonActivity(f.config,{probe:()=>({state:'absent'})})).active,null);
+  f.edit("UPDATE metadata SET value='5'");f.edit('ALTER TABLE daemon_state ADD COLUMN unknown_owner TEXT');
+  assert.equal((await observeDaemonActivity(f.config,{probe:()=>({state:'absent'})})).active,null);
+});
+test('retained lock or heartbeat does not become catalog-only legacy absence',async t=>{
+  const f=await restoredLegacy(t);
+  await writeFile(path.join(f.config.paths.locks,'daemon.lock'),'malformed retained lock');
+  assert.equal((await observeDaemonActivity(f.config,{probe:()=>({state:'absent'})})).active,null);
+  await rm(path.join(f.config.paths.locks,'daemon.lock'));
+  await writeFile(f.config.daemonHeartbeatFile,JSON.stringify({pid:12345,heartbeatAt:'2026-10-01T00:00:00.000Z'}));
+  assert.equal((await observeDaemonActivity(f.config,{probe:()=>({state:'absent'})})).active,null);
+});
