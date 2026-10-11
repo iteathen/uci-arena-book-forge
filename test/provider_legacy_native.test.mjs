@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import packageDocument from '../package.json' with { type: 'json' };
 import { randomUUID, createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -59,7 +60,7 @@ test('owned immutable044 clone: actual24 staged-pre,26 final-post,renamed-contro
     }
     await collect(newRoot);
     await writeFile(path.join(newRoot, 'arena-component.json'), JSON.stringify({ schema: 'arena_install_component_v1', schema_version: 1,
-      component_id: 'book_forge.service', component_version: '0.4.9', target_triple: 'windows-x86_64',
+      component_id: 'book_forge.service', component_version: packageDocument.version, target_triple: 'windows-x86_64',
       entrypoints: { cli: 'services/book-forge/src/cli.mjs', startup_launcher: 'services/book-forge/native/bin/uci_arena_service_launcher.exe',
         process_identity_helper: 'services/book-forge/native/bin/uci_arena_background_guard.exe' }, files }));
     await mkdir(workspace); const configFile = path.join(workspace, 'config.json');
