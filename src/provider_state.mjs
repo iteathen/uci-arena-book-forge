@@ -2,6 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { validProcessIdentity } from './process_identity.mjs';
+import { admitBookTaskDefinition } from './provider_task_xml.mjs';
 
 const cap = 16 * 1024 * 1024;
 const schema = 'uci_arena_book_lifecycle_before_state_v1';
@@ -87,6 +88,8 @@ function concreteIntent(value) {
       !exact(task.principal, ['current_user_sid', 'user_sid', 'logon_type', 'run_level']) ||
       typeof task.principal.current_user_sid !== 'string' || !/^S-\d(?:-\d+)+$/u.test(task.principal.current_user_sid) ||
       task.principal.current_user_sid !== task.principal.user_sid || task.principal.logon_type !== 3 || task.principal.run_level !== 0)) return false;
+  try { admitBookTaskDefinition(task.definition_xml, task.action, { enabled: captured ? task.enabled : undefined }); }
+  catch { return false; }
   return true;
 }
 function validPayload(value) {

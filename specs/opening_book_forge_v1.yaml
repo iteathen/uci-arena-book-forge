@@ -530,6 +530,7 @@ provider_lifecycle_windows_v3:
     - "Pre captures actual before state and a staged-public-payload/root/launch plan without guessing a future Node tuple; post admits and persists the actual destination/runtime binding before effects. Controller paths are not operation identities."
     - "After positively proven quiescence only, immutable0.4.4 restoration may transactionally reverse the exact schema4-to5 transient identity delta without altering historical records; unknown schemas or live/unknown retained identities fail without change."
     - "Original bounded private before-state is persisted before any task gate, registration, run, or deletion effect."
+    - "Private Task XML and its typed action must admit one consistent Microsoft Task Exec before callbacks, catalog restoration or task effects; original XML/triggers/settings are preserved, and captured gate facts agree."
     - "The full admitted component/runtime/action/workspace/configuration binding identifies desired state; root equality alone never identifies retry or compensation."
     - "Successive same-root runtime upgrades capture the actual current enablement and running-intent baseline; repeated and inverse requests converge or fail safely."
     - "Actual daemon activity and exact process absence remain distinct from Task registration and task-instance count."

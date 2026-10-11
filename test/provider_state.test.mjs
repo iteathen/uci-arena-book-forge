@@ -7,13 +7,17 @@ import { createHash } from 'node:crypto';
 import { BookLifecycleStore } from '../src/provider_state.mjs';
 import { convergeBookLifecycle } from '../src/provider_lifecycle.mjs';
 const hash = text => createHash('sha256').update(text).digest('hex');
-function intent(label, xml = '<Task/>') {
+function intent(label, description = '') {
+  const action = { command: 'C:\\Owned Store Fixture\\launcher.exe', arguments: '--restart "C:\\Owned Node\\node.exe"',
+    working_directory: 'C:\\Owned Store Fixture' };
+  const escape = value => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  const xml = `<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><RegistrationInfo><Description>${escape(description)}</Description></RegistrationInfo>` +
+    `<Settings><Enabled>false</Enabled></Settings><Actions Context="Author"><Exec><Command>${escape(action.command)}</Command>` +
+    `<Arguments>${escape(action.arguments)}</Arguments><WorkingDirectory>${escape(action.working_directory)}</WorkingDirectory></Exec></Actions></Task>`;
   return { binding: hash(label), registered: true, enabled: true, active: true,
     root: 'C:\\Owned Store Fixture', nodeExecutable: 'C:\\Owned Node\\node.exe', componentVersion: '0.4.9',
     nonce: null, launch: null, obstacleIdentity: null, catalogSchemaVersion: 5,
-    task: { definition_xml: xml, definition_sha256: hash(xml), action: {
-      command: 'C:\\Owned Store Fixture\\launcher.exe', arguments: '--restart "C:\\Owned Node\\node.exe"',
-      working_directory: 'C:\\Owned Store Fixture' } } };
+    task: { definition_xml: xml, definition_sha256: hash(xml), action } };
 }
 
 test('closed deferred packet admits pending payload only and rejects malformed plan or predecessor before callback', async () => {
@@ -78,7 +82,7 @@ test('actual bounded packet store retires completed large definitions before byt
   const workspace = await mkdtemp(path.join(os.tmpdir(), 'book-lifecycle-store-'));
   try {
     const store = new BookLifecycleStore(workspace);
-    let current = intent('root/0', '<Task>' + 'x'.repeat(900000) + '</Task>');
+    let current = intent('root/0', 'x'.repeat(900000));
     const platform = { desired: async request => ({ ...current, binding: hash(`root/${request.node}`), active: false, enabled: false }),
       inspect: async () => structuredClone(current), capture: async value => structuredClone(value),
       quiesce: async () => { current.active = false; },

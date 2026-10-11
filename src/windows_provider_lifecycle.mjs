@@ -10,6 +10,7 @@ import { observeDaemonActivity, observeDaemonDrainObstacle, observeOwnedLegacyAc
 import { probeProcessInstance, sameProcessInstance, validProcessIdentity } from './process_identity.mjs';
 import { admitBookNodeExecutable } from './provider_executable.mjs';
 import { readBookCatalogVersion, restoreBookCatalog4 } from './provider_catalog_compatibility.mjs';
+import { admitBookTaskDefinition } from './provider_task_xml.mjs';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const normalize = value => path.win32.normalize(value).replace(/[\\/]+$/u, '').toLowerCase();
@@ -227,6 +228,8 @@ export class WindowsBookLifecyclePlatform {
     throw failed();
   }
   async apply(target, current) {
+    admitBookTaskDefinition(target.task.definition_xml, target.task.action, {
+      enabled: Object.hasOwn(target.task, 'enabled') ? target.task.enabled : undefined });
     const descriptor = await this.admitRoot(target.root);
     const admitted = bindWindowsTaskToRoot({ registered: true, action: target.task.action }, descriptor, this.config);
     if (this.binding(descriptor, admitted.action, await this.executableIdentity(admitted.nodeExecutable)) !== target.binding ||

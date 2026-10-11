@@ -34,6 +34,17 @@ Complete same-directory temporary images are retained when activation fails.
 Files are regular, nonlinked and fd-bound; lifecycle records are not published
 in the neutral result or Manager status.
 
+The same bounded producer Task-XML admission runs while loading/saving private
+snapshots and again before catalog restoration or registration. It requires one
+unprefixed Microsoft Task/Actions/Exec and an exact once-decoded Command,
+Arguments and WorkingDirectory tuple equal to the retained typed action. DTD,
+entity declarations, namespace overrides/prefixes, duplicate action fields and
+unsupported markup fail before effects. Captured SDK enablement must agree with
+Settings/Enabled (the public default is true when absent). A planned disabled
+registration definition remains distinct from the later desired enabled intent.
+The original XML, including its triggers and settings, is preserved without
+regeneration; this parser supplies no new public Installer or SDK wire format.
+
 Selection uses the admitted root manifest, exact ordered Exec tuple, Node
 executable bytes and workspace/configuration paths. Root equality is not a
 rollback discriminator: a dependency-only `(R,R)` replacement with a new Node

@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { WindowsBookLifecyclePlatform } from '../src/windows_provider_lifecycle.mjs';
-import { startupAction } from '../src/windows_startup.mjs';
+import { startupAction, buildTaskXml } from '../src/windows_startup.mjs';
 
 const descriptor = { schema: 'uci_arena_book_component_root_v1', root: 'C:\\fixture',
   componentVersion: '0.4.4', componentManifestSha256: 'a'.repeat(64),
+  inventorySha256: 'b'.repeat(64),
   packageRoot: 'C:\\fixture\\services\\book-forge', cli: 'C:\\fixture\\services\\book-forge\\src\\cli.mjs',
   launcher: 'C:\\fixture\\services\\book-forge\\native\\bin\\uci_arena_service_launcher.exe' };
 const identity = { schema: 'uci_arena_process_instance_identity_v1', platform: 'win32', pid: 123,
@@ -15,8 +16,9 @@ function fixture({ instances = [guid], live = true } = {}) {
   const config = { workspace: 'C:\\workspace', configFile: 'C:\\workspace\\config.json', paths: { locks: 'C:\\workspace\\locks' } };
   const raw = startupAction(config, { descriptor, nodeExecutable: identity.executable_path });
   const action = { command: raw.command, arguments: raw.arguments, working_directory: raw.workingDirectory };
-  let task = { registered: true, enabled: true, definition_xml: '<fixture/>',
-    definition_sha256: createHash('sha256').update('<fixture/>').digest('hex'), action,
+  const xml = buildTaskXml(config, 'S-1-5-21-123', { descriptor, nodeExecutable: identity.executable_path });
+  let task = { registered: true, enabled: true, definition_xml: xml,
+    definition_sha256: createHash('sha256').update(xml).digest('hex'), action,
     instance_guids: [...instances], principal: { current_user_sid: 'S-1-5-21-123' } };
   const calls = [];
   const scheduler = { async perform(request) {
@@ -169,4 +171,40 @@ test('persistent queued Task0 cannot become ready and never relaunches the daemo
   await assert.rejects(f.platform.activate({ ...current, active: true }, current));
   assert.equal(f.calls.filter(call => call.operation === 'run').length, 1);
   assert.deepEqual(f.platform.launch.instanceGuids, []);
+});
+
+test('actual retained store rejects XML Exec disagreement before callback, schema restore or task mutation', async () => {
+  const fs = await import('node:fs/promises'); const os = await import('node:os'); const path = await import('node:path');
+  const { BookLifecycleStore } = await import('../src/provider_state.mjs');
+  const parent = await fs.realpath(os.tmpdir()); const root = await fs.mkdtemp(path.join(parent, 'book-xml-consistency-'));
+  try {
+    const f = fixture({ live: false, instances: [] }); await f.platform.begin([]);
+    const target = await f.platform.desired({ replacementRoot: descriptor.root });
+    const store = new BookLifecycleStore(root);
+    await store.transact(async state => { state.records.push({ before: target, desired: structuredClone(target),
+      preDone: false, postDone: false, last: null }); await state.save(); });
+    const filename = path.join(root, '.book-lifecycle/before-state.json');
+    const packet = JSON.parse(await fs.readFile(filename));
+    const bad = packet.records[0].desired;
+    bad.task.definition_xml = bad.task.definition_xml.replace(/<Command>[^<]+<\/Command>/u, '<Command>C:\\foreign.exe</Command>');
+    bad.task.definition_sha256 = createHash('sha256').update(bad.task.definition_xml).digest('hex');
+    await fs.writeFile(filename, JSON.stringify(packet));
+    const effects = []; let callbacks = 0;
+    f.platform.restoreCatalog = () => { effects.push('schema_restore'); };
+    const perform = f.platform.scheduler.perform;
+    f.platform.scheduler.perform = async request => {
+      if (request.operation !== 'inspect') effects.push(request.operation);
+      return perform(request);
+    };
+    await assert.rejects(store.transact(async state => { callbacks++;
+      await f.platform.apply(state.records[0].desired, await f.platform.inspect()); }));
+    assert.equal(callbacks, 0); assert.deepEqual(effects, []);
+    const count = f.calls.length;
+    await assert.rejects(f.platform.apply(bad, await f.platform.inspect()));
+    assert.deepEqual(effects, []); assert.equal(f.calls.length, count + 1);
+  } finally {
+    const resolved = await fs.realpath(root); const stat = await fs.lstat(root);
+    assert.equal(path.dirname(resolved), parent); assert.ok(path.basename(resolved).startsWith('book-xml-consistency-'));
+    assert.ok(stat.isDirectory() && !stat.isSymbolicLink()); await fs.rm(resolved, { recursive: true });
+  }
 });

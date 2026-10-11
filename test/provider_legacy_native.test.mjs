@@ -70,9 +70,11 @@ test('owned immutable044 clone: actual24 staged-pre,26 final-post,renamed-contro
     config = await loadConfig({ workspace, configFile }); assert.equal(await configureProcessIdentity(config), true);
     const oldDescriptor = await admitBookComponentRoot(oldRoot); const sid = await currentUserSid();
     const oldStartup = await import(pathToFileURL(path.join(oldDescriptor.packageRoot, 'src/windows_startup.mjs')));
+    const xmlArgument = value => oldStartup.quoteWindowsArgument(value).replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
     const oldXml = oldStartup.buildTaskXml({ ...config, nativeLauncher: oldDescriptor.launcher }, sid)
       .replace('<URI>\\UCI Arena Book Forge</URI>', `<URI>${taskPath}</URI>`)
-      .replaceAll(process.execPath, oldNode);
+      .replace(xmlArgument(process.execPath), xmlArgument(oldNode));
     const xmlFile = path.join(fixture, 'old-template.xml'); await writeFile(xmlFile, '\ufeff' + oldXml, 'utf16le');
     // Establish prior definition through the SAME published old registration
     // route, under a unique fixture name; never invoke the old lifecycle CLI.
@@ -98,12 +100,20 @@ const base=path.join(root,'services/book-forge/src');
 const {main}=await import(pathToFileURL(path.join(base,'cli.mjs')));
 const {runBookLifecycle}=await import(pathToFileURL(path.join(base,'provider_command.mjs')));
 const {WindowsBookLifecyclePlatform}=await import(pathToFileURL(path.join(base,'windows_provider_lifecycle.mjs')));
-const {observeOwnedLegacyActivity}=await import(pathToFileURL(path.join(base,'daemon_observation.mjs')));
+const {observeOwnedLegacyActivity,observeDaemonActivity,observeDaemonDrainObstacle}=await import(pathToFileURL(path.join(base,'daemon_observation.mjs')));
+const {restoreBookCatalog4}=await import(pathToFileURL(path.join(base,'provider_catalog_compatibility.mjs')));
 const {readDaemonOwnershipPacket}=await import(pathToFileURL(path.join(base,'daemon.mjs')));
 const {probeProcessInstance}=await import(pathToFileURL(path.join(base,'process_identity.mjs')));
 await main({argv,lifecycleImpl:(config,request)=>runBookLifecycle(config,request,{root,
  platformFactory:options=>{
- const platform=new WindowsBookLifecyclePlatform(config,{...options,taskPath,legacyActivity:async(config,options)=>{
+ const probe=label=>pid=>{const result=probeProcessInstance(pid);console.error(JSON.stringify({phase:'os-probe',label,state:result.state}));return result;};
+ const platform=new WindowsBookLifecyclePlatform(config,{...options,taskPath,probe:probe('absence'),
+ activity:config=>observeDaemonActivity(config,{probe:probe('activity')}),
+ drain:config=>observeDaemonDrainObstacle(config,{probe:probe('drain')}),
+ restoreCatalog:(config,options)=>{console.error(JSON.stringify({phase:'catalog-restore-enter'}));
+  try{restoreBookCatalog4(config,{...options,probe:probe('catalog')});console.error(JSON.stringify({phase:'catalog-restore-completed'}));}
+  catch(error){console.error(JSON.stringify({phase:'catalog-restore-failed'}));throw error;}},
+ legacyActivity:async(config,options)=>{
   const result=await observeOwnedLegacyActivity(config,options);
   const lock=await readDaemonOwnershipPacket(path.join(config.paths.locks,'daemon.lock'));
   const observed=lock?.value?.pid?probeProcessInstance(lock.value.pid):null;
@@ -115,6 +125,10 @@ await main({argv,lifecycleImpl:(config,request)=>runBookLifecycle(config,request
  const task=platform.task.bind(platform);platform.task=async(operation,...args)=>{
   const result=await task(operation,...args);console.error(JSON.stringify({phase:'task',operation,
    registered:result.registered,enabled:result.enabled,instances:result.instance_guids.length}));return result;};
+ for(const method of ['inspect','quiesce','apply']){const original=platform[method].bind(platform);
+  platform[method]=async(...args)=>{console.error(JSON.stringify({phase:'method-enter',method}));try{
+   const result=await original(...args);console.error(JSON.stringify({phase:'method-completed',method}));return result;}
+   catch(error){console.error(JSON.stringify({phase:'method-failed',method}));throw error;}};}
  return platform;}})});`);
     let callNumber = 0;
     const call = async (node, controlRoot, operation, previousRoot, replacementRoot) => {
