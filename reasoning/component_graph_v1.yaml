@@ -1,0 +1,110 @@
+schema: uci_arena_component_reasoning_graph_v1
+graph_id: uci_arena_book_forge
+version: 1
+status: initial_owner_directed
+component: uci_arena_book_forge
+global_graph:
+  repository: iteathen/uci-arena-installer
+  path: reasoning/suite_graph_v1.yaml
+
+imports:
+  objectives: [G-O1, G-O2]
+  premises: [G-P4, G-P6, G-P9, G-P10, G-P15]
+  targets: [G-T4, G-T6, G-T8, G-T10, G-T11, G-T12, G-T13]
+
+local_objectives:
+  - id: B-O1
+    statement: >
+      Produce opening knowledge that measurably improves or usefully tests engine chess
+      performance without disguising weak or contaminated evidence as strength.
+    derived_from: [G-O1]
+    confidence: 0.99
+  - id: B-O2
+    statement: >
+      Make opening-knowledge acquisition and maintenance useful in the background without
+      imposing significant operator or foreground-engine cost.
+    derived_from: [G-O2, G-T10]
+    confidence: 0.97
+
+premises:
+  - id: B-P1
+    statement: >
+      Aggregate public-game frequencies, rare-line coverage, and engine evaluation provide
+      different signals and none alone proves a book improves match strength.
+    confidence: 0.97
+  - id: B-P2
+    statement: >
+      Book qualification must be separated from integration publication so exploratory data
+      cannot silently become strength authority.
+    confidence: 0.99
+  - id: B-P3
+    statement: >
+      Source overlap and repeated observations can create false confidence unless their
+      contribution is explicitly owned and deduplicated.
+    confidence: 0.98
+  - id: B-P4
+    statement: >
+      Background book work has lower priority than active foreground engine play.
+    confidence: 0.995
+  - id: B-P5
+    statement: >
+      Immutable published snapshots let engines consume opening knowledge without learning
+      producer internals.
+    confidence: 0.98
+
+implicit_assertions:
+  - id: B-A1
+    statement: >
+      A book that scores well only because its qualification reuses the same correlated source
+      evidence can overstate real chess benefit.
+    derived_from: [B-P1, B-P3, G-P6]
+    confidence: 0.95
+  - id: B-A2
+    statement: >
+      More book coverage is not automatically better if additional moves lower expected
+      downstream playing strength.
+    derived_from: [B-O1, B-P1]
+    confidence: 0.97
+  - id: B-A3
+    statement: >
+      Background acquisition that measurably slows active chess can make the proving ground
+      worse even while producing more data.
+    derived_from: [B-P4, G-P15]
+    confidence: 0.99
+  - id: B-A4
+    statement: >
+      Engine consumption policy and Book Forge production policy should remain separate so a
+      book can be replaced or compared without changing the engine's producer assumptions.
+    derived_from: [G-P4, B-P5]
+    confidence: 0.97
+
+implementation_targets:
+  - {id: B-T1, name: diverse_relevant_source_acquisition, supports: [B-O1, G-T11]}
+  - {id: B-T2, name: overlap_and_source_identity_correctness, supports: [B-O1, G-T4]}
+  - {id: B-T3, name: evidence_based_move_selection_and_compilation, supports: [B-O1]}
+  - {id: B-T4, name: separate_integration_and_qualified_channels, supports: [B-O1, G-T4]}
+  - {id: B-T5, name: paired_strength_and_zero_regression_qualification, supports: [B-O1, G-T13]}
+  - {id: B-T6, name: immutable_reproducible_book_snapshots, supports: [G-T6, G-T12]}
+  - {id: B-T7, name: foreground_courtesy_and_resource_preemption, supports: [B-O2, G-T10]}
+  - {id: B-T8, name: resumable_low_burden_daemon_operation, supports: [B-O2, G-T7, G-T8]}
+  - {id: B-T9, name: bounded_truthful_status_and_provenance, supports: [B-O2, G-T9]}
+  - {id: B-T10, name: preserve_failed_and_historical_evidence, supports: [G-T4]}
+
+dominance_relations:
+  - {id: B-D1, stronger: B-T5, weaker: B-T1, context: more_source_data_conflicts_with_strength_qualification, confidence: 0.97, consequence: major}
+  - {id: B-D2, stronger: B-T2, weaker: B-T3, context: selection_would_use_double_counted_or_ambiguous_source_authority, confidence: 0.99, consequence: major}
+  - {id: B-D3, stronger: B-T7, weaker: B-T8, context: daemon_throughput_would_materially_harm_foreground_engine, confidence: 0.995, consequence: major}
+  - {id: B-D4, stronger: B-T4, weaker: B-T8, context: convenience_would_promote_integration_data_without_qualification, confidence: 0.995, consequence: critical}
+
+importance_relations:
+  - {id: B-I1, more_important: B-T3, less_important: B-T1, context: source_volume_is_already_sufficient, confidence: 0.86}
+  - {id: B-I2, more_important: B-T1, less_important: B-T3, context: coverage_gap_or_distribution_shift, confidence: 0.82}
+  - {id: B-I3, more_important: B-T5, less_important: B-T9, context: candidate_promotion_decision, confidence: 0.94}
+
+exports:
+  - id: B-X1
+    statement: immutable book snapshot identity channel and qualification status
+    supports_global: [G-T4, G-T6, G-T13]
+  - id: B-X2
+    statement: bounded producer health and background resource disposition
+    supports_global: [G-T8, G-T9, G-T10]
