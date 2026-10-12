@@ -3,6 +3,7 @@ graph_id: uci_arena_book_forge
 version: 1
 status: initial_owner_directed
 component: uci_arena_book_forge
+concern_areas: [C02, C03, C04, C05, C07, C08, C09, C10, C12]
 global_graph:
   repository: iteathen/uci-arena-installer
   path: reasoning/suite_graph_v1.yaml
@@ -79,6 +80,17 @@ premises:
       a separate qualification gate.
     confidence: 0.98
 
+premise_metadata:
+  B-P1: {kind: structural}
+  B-P2: {kind: structural}
+  B-P3: {kind: material_risk}
+  B-P4: {kind: material_risk}
+  B-P5: {kind: structural}
+  B-P6: {kind: empirical_regular}
+  B-P7: {kind: structural}
+  B-P8: {kind: empirical_regular}
+  B-P9: {kind: material_risk}
+
 implicit_assertions:
   - id: B-A1
     statement: >
@@ -146,17 +158,91 @@ implicit_assertions:
     derived_from: [G-P28, B-P2, B-P9]
     confidence: 0.999
 
+assertion_metadata:
+  B-A1: {inference: conditional, boundary: "Correlated source evidence can still be useful when its dependence is modeled and claims remain scoped."}
+  B-A2: {inference: structural, boundary: "Additional coverage can be beneficial when move quality is preserved or improved."}
+  B-A3: {inference: conditional, boundary: "Background work is not forbidden; its resource interference must remain below the threshold that changes foreground claims."}
+  B-A4: {inference: structural, boundary: "Consumer and producer may share public contracts; separation concerns semantic ownership, not total isolation."}
+  B-A5: {inference: conditional, boundary: "Historical qualification can remain valid in its original cohort after later engine changes."}
+  B-A6: {inference: structural, boundary: "Book identity may vary intentionally when book is the declared treatment."}
+  B-A7: {inference: structural, boundary: "Popularity remains useful as a source/coverage prior despite not being strength proof."}
+  B-A8: {inference: risk_implication, boundary: "Evaluator reuse does not automatically invalidate a candidate; independent downstream evidence can counter selection bias."}
+  B-A9: {inference: structural, boundary: "A nonrepresentative corpus can still be useful for narrow coverage or stress testing."}
+  B-A10: {inference: structural, boundary: "Fixtures remain valid integration/package evidence inside their declared scope."}
+
 implementation_targets:
-  - {id: B-T1, name: diverse_relevant_source_acquisition, supports: [B-O1, G-T11]}
-  - {id: B-T2, name: overlap_and_source_identity_correctness, supports: [B-O1, G-T4]}
-  - {id: B-T3, name: evidence_based_move_selection_and_compilation, supports: [B-O1]}
-  - {id: B-T4, name: separate_integration_and_qualified_channels, supports: [B-O1, G-T4]}
-  - {id: B-T5, name: paired_strength_and_zero_regression_qualification, supports: [B-O1, G-T13]}
-  - {id: B-T6, name: immutable_reproducible_book_snapshots, supports: [G-T6, G-T12]}
-  - {id: B-T7, name: foreground_courtesy_and_resource_preemption, supports: [B-O2, G-T10]}
-  - {id: B-T8, name: resumable_low_burden_daemon_operation, supports: [B-O2, G-T7, G-T8]}
-  - {id: B-T9, name: bounded_truthful_status_and_provenance, supports: [B-O2, G-T9]}
-  - {id: B-T10, name: preserve_failed_and_historical_evidence, supports: [G-T4]}
+  - id: B-T1
+    name: obtain_relevant_and_diverse_opening_evidence
+    statement: >
+      Acquire enough relevant opening observations to discover useful common, rare, and
+      underexplored positions without assuming source volume alone implies chess value.
+    supports: [B-O1, G-T11]
+  - id: B-T2
+    name: preserve_source_identity_and_dependence
+    statement: >
+      Retain source provenance, overlap, transposition, and dependence information well enough
+      to avoid double counting or false confidence.
+    supports: [B-O1, G-T4]
+  - id: B-T3
+    name: select_opening_moves_for_downstream_chess_value
+    statement: >
+      Turn admitted evidence into opening choices whose selection criteria are related to
+      downstream chess benefit rather than popularity or coverage alone.
+    supports: [B-O1]
+  - id: B-T4
+    name: distinguish_operational_usefulness_from_strength_authority
+    statement: >
+      Allow exploratory/integration knowledge to be operationally useful while keeping
+      strength-qualified claims separate and explicit.
+    supports: [B-O1, G-T4]
+  - id: B-T5
+    name: establish_book_strength_benefit_without_unacceptable_regression
+    statement: >
+      Qualify promoted opening knowledge with sufficiently independent downstream comparisons
+      that can detect meaningful benefit and material regressions in the declared cohort.
+    supports: [B-O1, G-T13]
+  - id: B-T6
+    name: publish_exact_reproducible_consumable_opening_knowledge
+    statement: >
+      Provide exact, reproducible, versioned opening knowledge whose identity and authority can
+      be consumed without access to producer-private state.
+    supports: [G-T6, G-T12]
+  - id: B-T7
+    name: avoid_material_foreground_chess_perturbation
+    statement: >
+      Keep background acquisition, analysis, and maintenance from materially changing active
+      foreground engine behavior used for chess or evidence claims.
+    supports: [B-O2, G-T10]
+  - id: B-T8
+    name: make_long_running_book_production_manageable_and_recoverable
+    statement: >
+      Keep background book production resumable, bounded, failure-tolerant, and low-burden for
+      the operator over long-running acquisition and analysis.
+    supports: [B-O2, G-T7, G-T8]
+  - id: B-T9
+    name: expose_truthful_book_state_and_provenance
+    statement: >
+      Make acquisition, analysis, publication, qualification, resource state, and provenance
+      inspectable without fabricating readiness or authority.
+    supports: [B-O2, G-T9]
+  - id: B-T10
+    name: retain_negative_and_historical_book_evidence
+    statement: >
+      Preserve failed candidates, superseded snapshots, and historical evidence when they
+      remain useful for avoiding repeated mistakes or understanding later decisions.
+    supports: [G-T4]
+
+target_semantics:
+  status: problem_characterized
+  solution_selected_by_reasoning_graph: false
+
+causal_relations:
+  - {id: B-C1, cause: B-T1, effect: B-T3, relation: discovery_enabler, confidence: 0.92}
+  - {id: B-C2, cause: B-T2, effect: B-T5, relation: validity_preserver, confidence: 0.97}
+  - {id: B-C3, cause: B-T3, effect: B-T5, relation: candidate_generation_path, confidence: 0.90}
+  - {id: B-C4, cause: B-T5, effect: B-T6, relation: strength_authority_enabler, confidence: 0.96}
+  - {id: B-C5, cause: B-T7, effect: G-T10, relation: validity_preserver, confidence: 0.98}
+  - {id: B-C6, cause: B-T9, effect: G-T9, relation: observability_enabler, confidence: 0.96}
 
 target_derivations:
   B-T1: [B-O1, B-P1, B-P8, G-P24]
@@ -183,10 +269,10 @@ assertion_relevance:
   B-A10: [B-T4, B-T5, B-T6]
 
 dominance_relations:
-  - {id: B-D1, stronger: B-T5, weaker: B-T1, context: more_source_data_conflicts_with_strength_qualification, confidence: 0.97, consequence: major}
-  - {id: B-D2, stronger: B-T2, weaker: B-T3, context: selection_would_use_double_counted_or_ambiguous_source_authority, confidence: 0.99, consequence: major}
-  - {id: B-D3, stronger: B-T7, weaker: B-T8, context: daemon_throughput_would_materially_harm_foreground_engine, confidence: 0.995, consequence: major}
-  - {id: B-D4, stronger: B-T4, weaker: B-T8, context: convenience_would_promote_integration_data_without_qualification, confidence: 0.995, consequence: critical}
+  - {id: B-D1, stronger: B-T5, weaker: B-T1, context: more_source_data_conflicts_with_strength_qualification, strength: strong_conditional, basis: [B-P1, B-P6, B-A2, B-A9], confidence: 0.97, consequence: major}
+  - {id: B-D2, stronger: B-T2, weaker: B-T3, context: selection_would_use_double_counted_or_ambiguous_source_authority, strength: strict_necessary_condition, basis: [B-P3, B-A1], confidence: 0.99, consequence: major}
+  - {id: B-D3, stronger: B-T7, weaker: B-T8, context: daemon_throughput_would_materially_harm_foreground_engine, strength: strong_conditional, basis: [B-P4, B-A3], confidence: 0.995, consequence: major}
+  - {id: B-D4, stronger: B-T4, weaker: B-T8, context: convenience_would_promote_integration_data_without_qualification, strength: strict_necessary_condition, basis: [B-P2, B-P9, B-A10], confidence: 0.995, consequence: critical}
 
 importance_relations:
   - {id: B-I1, more_important: B-T3, less_important: B-T1, context: source_volume_is_already_sufficient, confidence: 0.86}
