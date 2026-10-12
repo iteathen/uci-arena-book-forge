@@ -9,7 +9,7 @@ global_graph:
 
 imports:
   objectives: [G-O1, G-O2]
-  premises: [G-P4, G-P6, G-P7, G-P9, G-P10, G-P15, G-P17, G-P18, G-P20, G-P21, G-P22, G-P23, G-P24]
+  premises: [G-P4, G-P6, G-P7, G-P9, G-P10, G-P15, G-P17, G-P18, G-P20, G-P21, G-P22, G-P23, G-P24, G-P27, G-P28]
   targets: [G-T4, G-T6, G-T8, G-T10, G-T11, G-T12, G-T13]
 
 local_objectives:
@@ -138,6 +138,14 @@ implicit_assertions:
     derived_from: [B-P8, G-P24]
     confidence: 0.99
 
+  - id: B-A10
+    statement: >
+      Deterministic integration fixtures and source/compile tests can establish packaging and
+      contract behavior but cannot upgrade an opening snapshot into strength-qualified book
+      authority without the declared independent match gates.
+    derived_from: [G-P28, B-P2, B-P9]
+    confidence: 0.999
+
 implementation_targets:
   - {id: B-T1, name: diverse_relevant_source_acquisition, supports: [B-O1, G-T11]}
   - {id: B-T2, name: overlap_and_source_identity_correctness, supports: [B-O1, G-T4]}
@@ -155,7 +163,7 @@ target_derivations:
   B-T2: [B-O1, B-P3, G-P6]
   B-T3: [B-O1, B-P1, B-P6, B-P8]
   B-T4: [B-O1, B-P2, B-P9, G-P18]
-  B-T5: [B-O1, B-P6, B-P9, G-P17, G-P18]
+  B-T5: [B-O1, B-P6, B-P9, G-P17, G-P18, G-P27, G-P28]
   B-T6: [B-O1, B-O2, B-P5, G-P21, G-P22]
   B-T7: [B-O2, B-P4, G-P15]
   B-T8: [B-O2, B-P4, G-P7, G-P20]
@@ -172,6 +180,7 @@ assertion_relevance:
   B-A7: [B-T1, B-T3]
   B-A8: [B-T4, B-T5, B-T10]
   B-A9: [B-T1, B-T3, B-T5]
+  B-A10: [B-T4, B-T5, B-T6]
 
 dominance_relations:
   - {id: B-D1, stronger: B-T5, weaker: B-T1, context: more_source_data_conflicts_with_strength_qualification, confidence: 0.97, consequence: major}
