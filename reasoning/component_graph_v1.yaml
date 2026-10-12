@@ -44,12 +44,38 @@ premises:
     confidence: 0.98
   - id: B-P4
     statement: >
-      Background book work has lower priority than active foreground engine play.
+      Background acquisition, ingestion, Stockfish analysis, and maintenance can materially
+      contend with the foreground engine for CPU, disk, memory, or scheduling resources and
+      thereby perturb the chess behavior the Arena is trying to measure.
     confidence: 0.995
   - id: B-P5
     statement: >
       Immutable published snapshots let engines consume opening knowledge without learning
       producer internals.
+    confidence: 0.98
+
+  - id: B-P6
+    statement: >
+      Opening-book benefit is conditional on the consuming engine, rule/time-control context,
+      opponent/opening distribution, and downstream search/model behavior; a book is not
+      universally strength-positive merely because it is qualified in one cohort.
+    confidence: 0.99
+  - id: B-P7
+    statement: >
+      Changing the opening book changes the experiment distribution and can mask or amplify
+      search, model, timing, or engine changes in comparative matches.
+    confidence: 0.995
+  - id: B-P8
+    statement: >
+      Human/public-game frequency and rarity are useful priors for coverage but are not the
+      same population as elite engine-vs-engine play and therefore do not by themselves
+      establish optimal engine moves.
+    confidence: 0.99
+  - id: B-P9
+    statement: >
+      Using the same engine/evaluator repeatedly to propose, filter, and then assess book moves
+      creates feedback and selection risk unless downstream independent match evidence remains
+      a separate qualification gate.
     confidence: 0.98
 
 implicit_assertions:
@@ -78,6 +104,39 @@ implicit_assertions:
     derived_from: [G-P4, B-P5]
     confidence: 0.97
 
+  - id: B-A5
+    statement: >
+      A book shown beneficial for one engine/runtime/control cannot be assumed equally
+      beneficial for another engine or substantially changed runtime without evidence.
+    derived_from: [B-P6, G-P6]
+    confidence: 0.99
+  - id: B-A6
+    statement: >
+      A search/model comparison that changes book identity between cohorts cannot cleanly
+      attribute the outcome to search/model quality unless book difference is the declared
+      treatment.
+    derived_from: [B-P7, G-P17, G-P21]
+    confidence: 0.995
+  - id: B-A7
+    statement: >
+      A frequent or statistically popular move can still be a poor engine move; popularity
+      and strength are distinct claims.
+    derived_from: [B-P8, B-P1]
+    confidence: 0.995
+  - id: B-A8
+    statement: >
+      Reusing one evaluator's preferences throughout proposal and filtering increases
+      selection bias; independent paired match qualification is what can upgrade the result
+      into a strength claim.
+    derived_from: [B-P9, G-P18]
+    confidence: 0.985
+  - id: B-A9
+    statement: >
+      A larger source corpus cannot compensate for a source distribution that poorly
+      represents the target competitive population.
+    derived_from: [B-P8, G-P24]
+    confidence: 0.99
+
 implementation_targets:
   - {id: B-T1, name: diverse_relevant_source_acquisition, supports: [B-O1, G-T11]}
   - {id: B-T2, name: overlap_and_source_identity_correctness, supports: [B-O1, G-T4]}
@@ -89,6 +148,29 @@ implementation_targets:
   - {id: B-T8, name: resumable_low_burden_daemon_operation, supports: [B-O2, G-T7, G-T8]}
   - {id: B-T9, name: bounded_truthful_status_and_provenance, supports: [B-O2, G-T9]}
   - {id: B-T10, name: preserve_failed_and_historical_evidence, supports: [G-T4]}
+
+target_derivations:
+  B-T1: [B-O1, B-P1, B-P8, G-P24]
+  B-T2: [B-O1, B-P3, G-P6]
+  B-T3: [B-O1, B-P1, B-P6, B-P8]
+  B-T4: [B-O1, B-P2, B-P9, G-P18]
+  B-T5: [B-O1, B-P6, B-P9, G-P17, G-P18]
+  B-T6: [B-O1, B-O2, B-P5, G-P21, G-P22]
+  B-T7: [B-O2, B-P4, G-P15]
+  B-T8: [B-O2, B-P4, G-P7, G-P20]
+  B-T9: [B-O2, G-P20, G-P23]
+  B-T10: [B-O1, G-P9, G-P18]
+
+assertion_relevance:
+  B-A1: [B-T2, B-T4, B-T5]
+  B-A2: [B-T3, B-T5]
+  B-A3: [B-T7, B-T8]
+  B-A4: [B-T4, B-T6]
+  B-A5: [B-T3, B-T5, B-T6]
+  B-A6: [B-T5, B-T6]
+  B-A7: [B-T1, B-T3]
+  B-A8: [B-T4, B-T5, B-T10]
+  B-A9: [B-T1, B-T3, B-T5]
 
 dominance_relations:
   - {id: B-D1, stronger: B-T5, weaker: B-T1, context: more_source_data_conflicts_with_strength_qualification, confidence: 0.97, consequence: major}
