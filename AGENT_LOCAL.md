@@ -6,6 +6,16 @@ Universal engineering and design guidance comes from the account-global `AGENTS.
 
 UCI Arena Book Forge is the standalone opening-book production product. It owns source acquisition, Explorer/PGN ingestion, observation/frontier selection, qualification, overlap authority, compilation, bounded retention, immutable publication, daemon lifecycle, health/status, and Book Forge packaging.
 
+## Decision reasoning
+
+Before a substantive architecture, design, implementation-selection, or cross-component
+decision, read `reasoning/component_graph_v1.yaml` and the canonical suite graph at
+`iteathen/uci-arena-installer/reasoning/suite_graph_v1.yaml`.
+
+Book coverage, acquisition volume, and producer convenience are mechanisms rather than
+objectives; local decisions must trace to chess benefit, proving-ground value, usability, or a
+hard authority gate. Accepted Book Forge specs/contracts remain behavior authority.
+
 ## Local routing
 
 Before substantive work run:
