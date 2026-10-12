@@ -34,8 +34,9 @@ premises:
     confidence: 0.97
   - id: B-P2
     statement: >
-      Book qualification must be separated from integration publication so exploratory data
-      cannot silently become strength authority.
+      Integration publication and strength qualification answer different questions:
+      exploratory book data can be operationally useful before there is sufficient evidence
+      for a strength claim.
     confidence: 0.99
   - id: B-P3
     statement: >
