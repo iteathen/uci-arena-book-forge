@@ -11,7 +11,7 @@ global_graph:
 imports:
   objectives: [G-O1, G-O2]
   premises: [G-P4, G-P6, G-P7, G-P9, G-P10, G-P15, G-P17, G-P18, G-P20, G-P21, G-P22, G-P23, G-P24, G-P27, G-P28]
-  targets: [G-T4, G-T6, G-T8, G-T10, G-T11, G-T12, G-T13]
+  targets: [G-T4, G-T6, G-T7, G-T8, G-T9, G-T10, G-T11, G-T12, G-T13]
 
 local_objectives:
   - id: B-O1
@@ -112,8 +112,8 @@ implicit_assertions:
     confidence: 0.99
   - id: B-A4
     statement: >
-      Engine consumption policy and Book Forge production policy should remain separate so a
-      book can be replaced or compared without changing the engine's producer assumptions.
+      Embedding Book Forge production policy in engine consumption behavior couples book
+      replacement and comparison to engine changes and weakens independent attribution.
     derived_from: [G-P4, B-P5]
     confidence: 0.97
 
