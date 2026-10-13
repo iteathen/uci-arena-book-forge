@@ -16,7 +16,7 @@ github_automation:
   automatic_validation_triggers: [pull_request, push]
   ci_push_branches: [main, master, 'release/**', 'releases/**']
   forbidden_automatic_release_triggers: [pull_request, push, merge_group, schedule]
-  validation_authority: local_before_merge_and_required_github_ci
+  validation_authority: local_before_pull_request_and_merge_plus_required_github_ci
   manual_release:
     workflow: .github/workflows/component-release.yml
     trigger: workflow_dispatch_only
