@@ -6,29 +6,40 @@ meta:
 
 repository:
   canonical: iteathen/uci-arena-book-forge
-  visibility: private
+  visibility: public
   source_root: .
   suite_architecture_authority: iteathen/uci-arena-installer
 
 github_automation:
-  automatic_ci: disabled
-  forbidden_automatic_triggers: [pull_request, push, merge_group, schedule]
-  validation_authority: local_before_pull_request_and_merge
+  automatic_ci: read_only
+  ci_workflow: .github/workflows/ci.yml
+  automatic_validation_triggers: [pull_request, push]
+  ci_push_branches: [main, master, 'release/**', 'releases/**']
+  forbidden_automatic_release_triggers: [pull_request, push, merge_group, schedule]
+  validation_authority: local_before_pull_request_and_merge_plus_required_github_ci
   manual_release:
     workflow: .github/workflows/component-release.yml
     trigger: workflow_dispatch_only
   rules:
-    - Pull requests and branch pushes never start GitHub-hosted validation.
+    - Pull requests and declared branch pushes run read-only, secret-free
+      GitHub-hosted validation; CI does not sign or publish release candidates.
     - Exact local check commands and outcomes are recorded before merge.
     - Component release and provenance run only after explicit operator dispatch
       and are not automatically required pull-request status checks.
     - The dispatched job publishes its verified archive, provider result, and
-      Sigstore bundle directly to one private immutable candidate prerelease;
+      Sigstore bundle directly to one explicitly authorized immutable candidate prerelease;
       Actions artifact storage is not candidate transport.
-    - The suite release coordinator pre-provisions the exact empty candidate at
+    - The separately authorized suite release coordinator pre-provisions the exact empty candidate at
       the dispatched source head. The component workflow validates that
       identity and state, uploads exactly three assets, and verifies their
       remote names, sizes, and SHA-256 digests before succeeding.
+    - A non-draft prerelease and its assets in this public repository are
+      publicly accessible. The prerelease flag is not a confidentiality
+      boundary, stable suite approval, or opening-book strength qualification.
+    - Repository visibility and green CI grant no signing, publication, or
+      promotion authority. Drafts remain unpublished until separately
+      authorized; all exact source, manifest, digest, provenance, and producer
+      qualification gates remain required.
 
 contracts:
   component_ids: [book_forge.service, opening_book.standard]
