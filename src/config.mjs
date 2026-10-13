@@ -179,16 +179,22 @@ export function assertSupportedNode() {
 
 export async function loadConfig({ configFile, workspace } = {}) {
   assertSupportedNode();
-  let loaded = {};
-  let configDirectory = packageRoot;
-  if (configFile) {
-    const absolute = path.resolve(configFile);
-    loaded = JSON.parse(await readFile(absolute, 'utf8'));
+  const configuration = configFile
+    ? JSON.parse(await readFile(path.resolve(configFile), 'utf8')) : {};
+  return resolveConfig({ configuration, configFile, workspace });
+}
+
+// File and installer composition share one validator. The synchronous form
+// accepts already bounded bytes; it never opens a credential or executes a helper.
+export function resolveConfig({ configuration = {}, configFile, workspace } = {}) {
+  assertSupportedNode();
+  const loaded = configuration;
+  const configDirectory = configFile ? path.dirname(path.resolve(configFile)) : packageRoot;
+  if (configFile || Object.keys(loaded).length) {
     rejectUnknownConfiguration(defaults, loaded);
     if (!compatibleConfigSchema(loaded.schema)) {
       throw new Error(`Unsupported Book Forge config schema: ${loaded.schema ?? '<missing>'}`);
     }
-    configDirectory = path.dirname(absolute);
   }
   const config = merge(structuredClone(defaults), loaded);
   config.schema = defaults.schema;
