@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { loadConfig, packageRoot } from '../src/config.mjs';
@@ -17,7 +17,7 @@ import { Catalog } from '../src/catalog.mjs';
 import packageDocument from '../package.json' with { type: 'json' };
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
-test('owned Windows Book task: C-to-E catalog-only legacy restore, actual daemon ready and normal joined lifecycle', {
+test('owned Windows Book task: canonical catalog-only relocation, actual daemon ready and normal joined lifecycle', {
   skip: process.platform !== 'win32', timeout: 120000,
 }, async () => {
   const parent = await realpath(os.tmpdir());
@@ -25,7 +25,12 @@ test('owned Windows Book task: C-to-E catalog-only legacy restore, actual daemon
   const root = path.join(fixture, 'component'); const destination = path.join(root, 'services/book-forge');
   const sourceWorkspace = path.join(fixture, 'retained-source');
   const sourceBackup = path.join(fixture, 'retained-source-backup');
-  const eParent = await realpath(await mkdtemp('E:/uci-arena-task-builds/book-v3-restored-'));
+  const selectedRelocationParent = process.env.BOOK_FORGE_NATIVE_RELOCATION_ROOT ?? parent;
+  assert.equal(path.isAbsolute(selectedRelocationParent), true);
+  const relocationParent = await realpath(selectedRelocationParent);
+  const eParent = await realpath(await mkdtemp(path.join(relocationParent, 'book-v3-restored-')));
+  const crossVolumeRelocation = (await stat(parent)).dev !== (await stat(relocationParent)).dev;
+  if (process.env.BOOK_FORGE_NATIVE_REQUIRE_CROSS_VOLUME === '1') assert.equal(crossVolumeRelocation, true);
   const workspace = path.join(eParent, 'workspace');
   const taskPath = `\\UCI Arena Book Forge Test ${randomUUID()}`;
   const scheduler = new WindowsTaskScheduler();
@@ -115,7 +120,8 @@ test('owned Windows Book task: C-to-E catalog-only legacy restore, actual daemon
       version:packageDocument.version,sourceBackup,workspace,sourceCatalogSha256:sha(sourceBytes),originalBytesPreserved:true,
       catalogOnlyCopy:true,locksHeartbeatStartupAuthorityCopied:false,legacyPid:2147483600,
       nativeInstallReady:true,repeatedForwardInverse:true,normalUninstallReady:true,ownedTaskPath:taskPath,
-      fixtureDisposition:'E workspace/receipt retained; C component/fixture removed only after exact owned task/child closure'},null,2));
+      crossVolumeRelocation,sourceParent:parent,relocationParent,
+      fixtureDisposition:'Relocated workspace/receipt retained; source component/fixture removed only after exact owned task/child closure'},null,2));
     assert.equal((await call('uninstall')).disposition, 'ready');
     safelyClosed = true;
   } finally {

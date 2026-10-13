@@ -527,6 +527,7 @@ provider_lifecycle_windows_v3:
   result_contract: arena_provider_lifecycle_result_v1
   transactional_authority: arena_provider_lifecycle_transactional_v1
   rules:
+    - "Root and private lifecycle packet admission share one explicit supported-version registry. The current package version must pass complete inventoried-root and durable lifecycle-packet regressions before release; arbitrary semver remains unsupported. Native fixture roots use canonical owned temporary parents, and relocation is called cross-volume only when observed filesystem device identities differ."
     - "The neutral lifecycle CLI branches before Catalog construction or migration."
     - "Pre captures actual before state and a staged-public-payload/root/launch plan without guessing a future Node tuple; post admits and persists the actual destination/runtime binding before effects. Controller paths are not operation identities."
     - "After positively proven quiescence only, immutable0.4.4 restoration may transactionally reverse the exact schema4-to5 transient identity delta without altering historical records; unknown schemas or live/unknown retained identities fail without change."

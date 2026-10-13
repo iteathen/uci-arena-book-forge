@@ -5,7 +5,8 @@ import path from 'node:path';
 const LIMITS = Object.freeze({ manifest: 16 * 1024 * 1024, package: 65536,
   rows: 4096, total: 512 * 1024 * 1024 });
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
-const supported = new Set(['0.4.4', '0.4.8', '0.4.9', '0.4.10']);
+export const supportedBookComponentVersions = Object.freeze(['0.4.4', '0.4.8', '0.4.9', '0.4.10', '0.4.11', '0.4.12']);
+const supported = new Set(supportedBookComponentVersions);
 const text = value => typeof value === 'string' && value.isWellFormed() &&
   value.length > 0 && value.length <= 32767 && !/[\u0000\r\n]/u.test(value);
 const samePath = (a, b) => process.platform === 'win32'

@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { BookLifecycleStore } from '../src/provider_state.mjs';
 import { convergeBookLifecycle } from '../src/provider_lifecycle.mjs';
+import packageDocument from '../package.json' with { type: 'json' };
 const hash = text => createHash('sha256').update(text).digest('hex');
 function intent(label, description = '') {
   const action = { command: 'C:\\Owned Store Fixture\\launcher.exe', arguments: '--restart "C:\\Owned Node\\node.exe"',
@@ -20,9 +21,36 @@ function intent(label, description = '') {
     task: { definition_xml: xml, definition_sha256: hash(xml), action } };
 }
 
+async function ownedWorkspace() {
+  const parent = await realpath(os.tmpdir());
+  return realpath(await mkdtemp(path.join(parent, 'book-lifecycle-store-')));
+}
+
+test('the current package version survives exact lifecycle payload and before-state serialization', async () => {
+  const workspace = await ownedWorkspace();
+  try {
+    const store = new BookLifecycleStore(workspace);
+    const before = { ...intent('current-package'), componentVersion: packageDocument.version,
+      payloadIdentity: { componentVersion: packageDocument.version,
+        componentManifestSha256: hash('current-manifest'), inventorySha256: hash('current-inventory') } };
+    await store.transact(async state => {
+      state.records.push({ before, desired: structuredClone(before), preDone: false, postDone: false, last: null });
+      await state.save();
+    });
+    await store.transact(async state => assert.deepEqual(state.records[0].before, before));
+  } finally {
+    const fs = await import('node:fs/promises');
+    const resolved = await fs.realpath(workspace);const metadata = await fs.lstat(workspace);
+    assert.equal(path.dirname(resolved), await fs.realpath(os.tmpdir()));
+    assert.ok(path.basename(resolved).startsWith('book-lifecycle-store-'));
+    assert.ok(metadata.isDirectory() && !metadata.isSymbolicLink());
+    await rm(resolved, { recursive: true });
+  }
+});
+
 test('closed deferred packet admits pending payload only and rejects malformed plan or predecessor before callback', async () => {
   const fs = await import('node:fs/promises');
-  const workspace = await mkdtemp(path.join(os.tmpdir(), 'book-lifecycle-store-'));
+  const workspace = await ownedWorkspace();
   try {
     const store = new BookLifecycleStore(workspace);
     const before = { ...intent('A'), payloadIdentity: { componentVersion: '0.4.9',
@@ -53,7 +81,7 @@ test('closed deferred packet admits pending payload only and rejects malformed p
 });
 
 test('bounded producer store preserves before-state, serializes ownership and rejects malformed/foreign unfinished state', async () => {
-  const workspace = await mkdtemp(path.join(os.tmpdir(), 'book-lifecycle-store-'));
+  const workspace = await ownedWorkspace();
   try {
     const store = new BookLifecycleStore(workspace);
     await store.transact(async state => {
@@ -79,7 +107,7 @@ test('bounded producer store preserves before-state, serializes ownership and re
 });
 
 test('actual bounded packet store retires completed large definitions before byte capacity exhaustion', async () => {
-  const workspace = await mkdtemp(path.join(os.tmpdir(), 'book-lifecycle-store-'));
+  const workspace = await ownedWorkspace();
   try {
     const store = new BookLifecycleStore(workspace);
     let current = intent('root/0', 'x'.repeat(900000));
@@ -105,7 +133,7 @@ test('actual bounded packet store retires completed large definitions before byt
 });
 
 test('real packet rejects malformed root/task/launch/terminal/phase facts before entering callback', async () => {
-  const workspace = await mkdtemp(path.join(os.tmpdir(), 'book-lifecycle-store-'));
+  const workspace = await ownedWorkspace();
   try {
     const store = new BookLifecycleStore(workspace);
     await store.transact(async state => { state.records.push({ before: intent('A'), desired: intent('B'),

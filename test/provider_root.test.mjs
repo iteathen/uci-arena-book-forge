@@ -6,6 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { admitBookComponentRoot } from '../src/provider_root.mjs';
 import { WindowsBookLifecyclePlatform } from '../src/windows_provider_lifecycle.mjs';
+import packageDocument from '../package.json' with { type: 'json' };
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 // These data-only fixture manifests deliberately select Windows inventory
@@ -58,6 +59,11 @@ test('exact public component root admits declared roles and entire inventoried c
 });
 test('current0.4.10 exact public inventory is admitted without retiring historical supported versions',async t=>{
   const f=await fixture(t,'0.4.10');assert.equal((await admitWindowsRoot(f.root)).componentVersion,'0.4.10');
+});
+
+test('the current package version admits its exact complete inventory before candidate construction', async t => {
+  const f = await fixture(t, packageDocument.version);
+  assert.equal((await admitWindowsRoot(f.root)).componentVersion, packageDocument.version);
 });
 
 test('physically retired completed source is optional history, but requested restoration requires exact payload', async t => {
