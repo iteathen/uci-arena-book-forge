@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { supportedBookComponentVersions } from './provider_root.mjs';
 import { validProcessIdentity } from './process_identity.mjs';
 import { admitBookTaskDefinition } from './provider_task_xml.mjs';
 
@@ -73,7 +74,7 @@ function concreteIntent(value) {
     task.principal === null && task.action === null && Array.isArray(task.instance_guids) && task.instance_guids.length === 0;
   if (!sha(value.binding) || !absolute(value.root) || !absolute(value.nodeExecutable) ||
       path.win32.basename(value.nodeExecutable).toLowerCase() !== 'node.exe' ||
-      (value.componentVersion !== undefined && !['0.4.4', '0.4.8', '0.4.9', '0.4.10'].includes(value.componentVersion))) return false;
+      (value.componentVersion !== undefined && !supportedBookComponentVersions.includes(value.componentVersion))) return false;
   const planned = exact(task, ['action', 'definition_xml', 'definition_sha256']);
   const captured = exact(task, ['registered', 'enabled', 'definition_xml', 'definition_sha256', 'instance_guids', 'principal', 'action']);
   if (!planned && !captured) return false;
@@ -94,7 +95,7 @@ function concreteIntent(value) {
 }
 function validPayload(value) {
   return exact(value, ['componentVersion', 'componentManifestSha256', 'inventorySha256']) &&
-    ['0.4.4', '0.4.8', '0.4.9', '0.4.10'].includes(value.componentVersion) &&
+    supportedBookComponentVersions.includes(value.componentVersion) &&
     sha(value.componentManifestSha256) && sha(value.inventorySha256);
 }
 function validPlan(value) {
